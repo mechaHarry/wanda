@@ -215,7 +215,7 @@ extension TerminalCoreTests {
         XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "ef")
     }
 
-    func testModelAlternateScreenDoesNotMutateScrollback() {
+    func testAlternateScreenDoesNotMutateScrollback() {
         var model = TerminalModel(columns: 3, rows: 2, scrollbackLimit: 5)
         model.apply(.print("A"))
 
