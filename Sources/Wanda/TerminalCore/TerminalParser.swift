@@ -75,9 +75,7 @@ public struct SwiftTerminalParser: TerminalParser {
         let character = Character(scalar)
 
         if byte >= 0x30 && byte <= 0x3F {
-            let digitCount = buffer.reduce(0) { partial, char in
-                char.isNumber ? partial + 1 : partial
-            } + (character.isNumber ? 1 : 0)
+            let digitCount = currentParameterDigitCount(in: buffer) + (character.isNumber ? 1 : 0)
 
             if digitCount > maxParameterDigits {
                 events.append(.malformedSequence)
@@ -123,5 +121,9 @@ public struct SwiftTerminalParser: TerminalParser {
         if byte >= 0x40 && byte <= 0x7E {
             state = .ground
         }
+    }
+
+    private func currentParameterDigitCount(in buffer: String) -> Int {
+        buffer.reversed().prefix { $0.isNumber }.count
     }
 }

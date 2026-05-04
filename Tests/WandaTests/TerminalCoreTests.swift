@@ -87,4 +87,12 @@ extension TerminalCoreTests {
 
         XCTAssertEqual(events, [.malformedSequence])
     }
+
+    func testParserBoundsCSIParametersIndividually() {
+        var parser = SwiftTerminalParser(maxParameterDigits: 4)
+
+        let events = parser.parse(Array("\u{001B}[1234;1H".utf8))
+
+        XCTAssertEqual(events, [.moveCursor(row: 1233, column: 0)])
+    }
 }
