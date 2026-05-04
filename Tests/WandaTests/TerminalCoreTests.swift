@@ -31,4 +31,34 @@ final class TerminalCoreTests: XCTestCase {
         XCTAssertEqual(grid.cell(at: TerminalPoint(column: 0, row: 1)), .blank)
         XCTAssertEqual(grid.cell(at: TerminalPoint(column: 2, row: 1)), .blank)
     }
+
+    func testClearAllResetsEveryPopulatedCell() {
+        var grid = TerminalGrid(columns: 2, rows: 2)
+        grid.setCell(TerminalCell(character: "A"), at: TerminalPoint(column: 0, row: 0))
+        grid.setCell(TerminalCell(character: "B"), at: TerminalPoint(column: 1, row: 0))
+        grid.setCell(TerminalCell(character: "C"), at: TerminalPoint(column: 0, row: 1))
+        grid.setCell(TerminalCell(character: "D"), at: TerminalPoint(column: 1, row: 1))
+
+        grid.clearAll()
+
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 0, row: 0)), .blank)
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 1, row: 0)), .blank)
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 0, row: 1)), .blank)
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 1, row: 1)), .blank)
+    }
+
+    func testRowCellsReturnsRequestedRowInOrderWithoutExposingMutableStorage() {
+        var grid = TerminalGrid(columns: 3, rows: 2)
+        grid.setCell(TerminalCell(character: "A"), at: TerminalPoint(column: 0, row: 1))
+        grid.setCell(TerminalCell(character: "B"), at: TerminalPoint(column: 1, row: 1))
+        grid.setCell(TerminalCell(character: "C"), at: TerminalPoint(column: 2, row: 1))
+
+        var row = grid.rowCells(1)
+
+        XCTAssertEqual(row.map(\.character), ["A", "B", "C"])
+
+        row[0] = .blank
+
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 0, row: 1)).character, "A")
+    }
 }
