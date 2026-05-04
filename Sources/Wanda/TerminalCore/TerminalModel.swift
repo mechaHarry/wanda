@@ -60,6 +60,7 @@ public struct TerminalModel: Equatable, Sendable {
             withVisibleGrid { grid in
                 grid.clearAll()
             }
+            setCursor(row: 0, column: 0)
             markAllRowsDirty()
         case .clearLine:
             let row = cursor.row
@@ -171,26 +172,10 @@ public struct TerminalModel: Equatable, Sendable {
                 currentAttributes.isUnderline = true
             case 7:
                 currentAttributes.isInverse = true
-            case 22:
-                currentAttributes.isBold = false
-            case 23:
-                currentAttributes.isItalic = false
-            case 24:
-                currentAttributes.isUnderline = false
-            case 27:
-                currentAttributes.isInverse = false
             case 30...37:
                 currentAttributes.foreground = .ansi(index: UInt8(parameter - 30))
-            case 39:
-                currentAttributes.foreground = .default
             case 40...47:
                 currentAttributes.background = .ansi(index: UInt8(parameter - 40))
-            case 49:
-                currentAttributes.background = .default
-            case 90...97:
-                currentAttributes.foreground = .ansi(index: UInt8(parameter - 90 + 8))
-            case 100...107:
-                currentAttributes.background = .ansi(index: UInt8(parameter - 100 + 8))
             default:
                 break
             }
@@ -198,11 +183,18 @@ public struct TerminalModel: Equatable, Sendable {
     }
 
     private mutating func setCursor(row: Int, column: Int) {
+        let oldCursor = cursor
+        let hadPendingWrap = pendingWrap
         let clampedRow = min(max(row, 0), visibleGrid.rows - 1)
         let clampedColumn = min(max(column, 0), visibleGrid.columns - 1)
         cursor = TerminalPoint(column: clampedColumn, row: clampedRow)
         setPendingWrap(false)
         saveCursor()
+
+        if oldCursor != cursor || hadPendingWrap {
+            markDirty(row: oldCursor.row)
+            markDirty(row: cursor.row)
+        }
     }
 
     private mutating func saveCursor() {

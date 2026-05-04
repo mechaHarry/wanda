@@ -215,7 +215,7 @@ extension TerminalCoreTests {
         XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "ef")
     }
 
-    func testAlternateScreenDoesNotMutateScrollback() {
+    func testModelAlternateScreenDoesNotMutateScrollback() {
         var model = TerminalModel(columns: 3, rows: 2, scrollbackLimit: 5)
         model.apply(.print("A"))
 
@@ -238,7 +238,7 @@ extension TerminalCoreTests {
 
         XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 2, row: 0)).character, "Y")
         XCTAssertEqual(model.cursor, TerminalPoint(column: 0, row: 1))
-        XCTAssertEqual(model.drainDirtyRows(), Set([0]))
+        XCTAssertEqual(model.drainDirtyRows(), Set([0, 1]))
         XCTAssertEqual(model.dirtyRows, [])
     }
 
@@ -268,7 +268,71 @@ extension TerminalCoreTests {
         XCTAssertEqual(model.visibleGrid.rowCells(1), [.blank, .blank, .blank])
     }
 
-    func testAlternateScreenHasIndependentGridAndCursor() {
+    func testModelClearScreenResetsCursorAndPendingWrap() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("A"))
+        model.apply(.print("B"))
+
+        model.apply(.clearScreen)
+        model.apply(.print("C"))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "C")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 1)).character, " ")
+    }
+
+    func testModelCursorMovementMarksOldAndNewRowsDirty() {
+        var model = TerminalModel(columns: 4, rows: 2, scrollbackLimit: 5)
+        _ = model.drainDirtyRows()
+
+        model.apply(.moveCursor(row: 1, column: 0))
+
+        XCTAssertEqual(model.dirtyRows, Set([0, 1]))
+    }
+
+    func testModelSameRowCursorMovementMarksRowDirty() {
+        var model = TerminalModel(columns: 4, rows: 2, scrollbackLimit: 5)
+        _ = model.drainDirtyRows()
+
+        model.apply(.moveCursor(row: 0, column: 2))
+
+        XCTAssertEqual(model.dirtyRows, Set([0]))
+    }
+
+    func testModelMalformedSequenceIsNoOp() {
+        var model = TerminalModel(columns: 4, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("A"))
+        _ = model.drainDirtyRows()
+        let before = model
+
+        model.apply(.malformedSequence)
+
+        XCTAssertEqual(model, before)
+    }
+
+    func testModelZeroScrollbackLimitRetainsNoScrollback() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 0)
+
+        for character in "abcdefgh" {
+            model.apply(.print(character))
+        }
+
+        XCTAssertEqual(model.scrollback.count, 0)
+    }
+
+    func testModelAlternateScreenScrollingDoesNotMutateScrollback() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
+
+        model.apply(.useAlternateScreen(true))
+        for character in "abcdefgh" {
+            model.apply(.print(character))
+        }
+        model.apply(.useAlternateScreen(false))
+
+        XCTAssertEqual(model.scrollback.count, 0)
+    }
+
+    func testModelAlternateScreenHasIndependentGridAndCursor() {
         var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
         model.apply(.print("A"))
 
