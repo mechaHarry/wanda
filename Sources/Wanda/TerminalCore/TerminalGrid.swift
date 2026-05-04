@@ -38,6 +38,22 @@ public struct TerminalGrid: Equatable, Sendable {
         return Array(cells[start..<(start + columns)])
     }
 
+    public mutating func replaceRow(_ row: Int, with newCells: [TerminalCell]) {
+        precondition(row >= 0 && row < rows, "Row out of bounds")
+        precondition(newCells.count == columns, "Replacement row must match grid width")
+        let start = row * columns
+        cells.replaceSubrange(start..<(start + columns), with: newCells)
+    }
+
+    public mutating func scrollUpOneLine() -> [TerminalCell] {
+        let removed = rowCells(0)
+        for row in 1..<rows {
+            replaceRow(row - 1, with: rowCells(row))
+        }
+        replaceRow(rows - 1, with: Array(repeating: .blank, count: columns))
+        return removed
+    }
+
     private func index(for point: TerminalPoint) -> Int {
         precondition(point.column >= 0 && point.column < columns, "Column out of bounds")
         precondition(point.row >= 0 && point.row < rows, "Row out of bounds")
