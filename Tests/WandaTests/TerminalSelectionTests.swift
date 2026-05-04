@@ -38,4 +38,15 @@ final class TerminalSelectionTests: XCTestCase {
 
         XCTAssertEqual(token.string(in: grid), "beta")
     }
+
+    func testDoubleClickTokenOnDelimiterDoesNotCrossDelimiter() {
+        var grid = TerminalGrid(columns: 20, rows: 1)
+        for (index, character) in Array("alpha(beta").enumerated() {
+            grid.setCell(TerminalCell(character: character), at: TerminalPoint(column: index, row: 0))
+        }
+
+        let token = TerminalSelection.token(at: TerminalPoint(column: 5, row: 0), in: grid)
+
+        XCTAssertEqual(token.string(in: grid), "(")
+    }
 }

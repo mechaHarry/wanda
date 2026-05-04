@@ -27,6 +27,11 @@ public struct TerminalSelection: Equatable, Sendable {
 
     public static func token(at point: TerminalPoint, in grid: TerminalGrid) -> TerminalSelection {
         let row = point.row
+        let character = grid.cell(at: point).character
+        guard isTokenCharacter(character) else {
+            return TerminalSelection(start: point, end: point)
+        }
+
         var left = point.column
         var right = point.column
 
