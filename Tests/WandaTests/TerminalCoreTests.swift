@@ -62,3 +62,29 @@ final class TerminalCoreTests: XCTestCase {
         XCTAssertEqual(grid.cell(at: TerminalPoint(column: 0, row: 1)).character, "A")
     }
 }
+
+extension TerminalCoreTests {
+    func testParserEmitsPrintableText() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("abc".utf8))
+
+        XCTAssertEqual(events, [.print("a"), .print("b"), .print("c")])
+    }
+
+    func testParserEmitsCursorMoveForCSIH() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[3;5H".utf8))
+
+        XCTAssertEqual(events, [.moveCursor(row: 2, column: 4)])
+    }
+
+    func testParserBoundsOversizedCSIParameters() {
+        var parser = SwiftTerminalParser(maxParameterDigits: 4)
+
+        let events = parser.parse(Array("\u{001B}[12345;1H".utf8))
+
+        XCTAssertEqual(events, [.malformedSequence])
+    }
+}
