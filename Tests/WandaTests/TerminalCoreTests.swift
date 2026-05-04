@@ -95,4 +95,62 @@ extension TerminalCoreTests {
 
         XCTAssertEqual(events, [.moveCursor(row: 1233, column: 0)])
     }
+
+    func testParserPreservesEmptyCursorParameterDefaults() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[;5H".utf8))
+
+        XCTAssertEqual(events, [.moveCursor(row: 0, column: 4)])
+    }
+
+    func testParserBoundsCSISeparatorGrowth() {
+        var parser = SwiftTerminalParser(maxParameterDigits: 4, maxCSIBufferLength: 4)
+
+        let events = parser.parse(Array("\u{001B}[;;;;;H".utf8))
+
+        XCTAssertEqual(events, [.malformedSequence])
+    }
+
+    func testParserCarriesSplitCSIStateAcrossParseCalls() {
+        var parser = SwiftTerminalParser()
+
+        let firstEvents = parser.parse(Array("\u{001B}[3".utf8))
+        let secondEvents = parser.parse(Array(";5H".utf8))
+
+        XCTAssertEqual(firstEvents, [])
+        XCTAssertEqual(secondEvents, [.moveCursor(row: 2, column: 4)])
+    }
+
+    func testParserEmitsControlEvents() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse([0x08, 0x0A, 0x0D])
+
+        XCTAssertEqual(events, [.backspace, .lineFeed, .carriageReturn])
+    }
+
+    func testParserEmitsClearAndSGREvents() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[2J\u{001B}[K\u{001B}[m\u{001B}[31;1m".utf8))
+
+        XCTAssertEqual(events, [.clearScreen, .clearLine, .setGraphicRendition([0]), .setGraphicRendition([31, 1])])
+    }
+
+    func testParserEmitsAlternateScreenEvents() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[?1049h\u{001B}[?1049l".utf8))
+
+        XCTAssertEqual(events, [.useAlternateScreen(true), .useAlternateScreen(false)])
+    }
+
+    func testParserRecoversAfterMalformedEscape() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}XA".utf8))
+
+        XCTAssertEqual(events, [.malformedSequence, .print("A")])
+    }
 }

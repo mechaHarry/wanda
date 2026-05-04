@@ -14,9 +14,11 @@ public struct SwiftTerminalParser: TerminalParser {
 
     private var state: State = .ground
     private let maxParameterDigits: Int
+    private let maxCSIBufferLength: Int
 
-    public init(maxParameterDigits: Int = 8) {
+    public init(maxParameterDigits: Int = 8, maxCSIBufferLength: Int = 64) {
         self.maxParameterDigits = maxParameterDigits
+        self.maxCSIBufferLength = maxCSIBufferLength
     }
 
     public mutating func parse(_ bytes: [UInt8]) -> [TerminalEvent] {
@@ -75,6 +77,12 @@ public struct SwiftTerminalParser: TerminalParser {
         let character = Character(scalar)
 
         if byte >= 0x30 && byte <= 0x3F {
+            if buffer.count + 1 > maxCSIBufferLength {
+                events.append(.malformedSequence)
+                state = .discardCSI
+                return
+            }
+
             let digitCount = currentParameterDigitCount(in: buffer) + (character.isNumber ? 1 : 0)
 
             if digitCount > maxParameterDigits {
@@ -87,26 +95,26 @@ public struct SwiftTerminalParser: TerminalParser {
             return
         }
 
-        let parameters = buffer.split(separator: ";").map { Int($0) ?? 0 }
+        let parameters = parseParameters(buffer)
         switch byte {
         case UInt8(ascii: "H"), UInt8(ascii: "f"):
-            let row = max((parameters.first ?? 1) - 1, 0)
-            let column = max((parameters.dropFirst().first ?? 1) - 1, 0)
+            let row = max(cursorParameter(parameters, at: 0) - 1, 0)
+            let column = max(cursorParameter(parameters, at: 1) - 1, 0)
             events.append(.moveCursor(row: row, column: column))
         case UInt8(ascii: "A"):
-            events.append(.cursorUp(max(parameters.first ?? 1, 1)))
+            events.append(.cursorUp(movementParameter(parameters)))
         case UInt8(ascii: "B"):
-            events.append(.cursorDown(max(parameters.first ?? 1, 1)))
+            events.append(.cursorDown(movementParameter(parameters)))
         case UInt8(ascii: "C"):
-            events.append(.cursorForward(max(parameters.first ?? 1, 1)))
+            events.append(.cursorForward(movementParameter(parameters)))
         case UInt8(ascii: "D"):
-            events.append(.cursorBackward(max(parameters.first ?? 1, 1)))
+            events.append(.cursorBackward(movementParameter(parameters)))
         case UInt8(ascii: "J"):
             events.append(.clearScreen)
         case UInt8(ascii: "K"):
             events.append(.clearLine)
         case UInt8(ascii: "m"):
-            events.append(.setGraphicRendition(parameters.isEmpty ? [0] : parameters))
+            events.append(.setGraphicRendition(parameters))
         case UInt8(ascii: "h") where buffer == "?1049":
             events.append(.useAlternateScreen(true))
         case UInt8(ascii: "l") where buffer == "?1049":
@@ -125,5 +133,21 @@ public struct SwiftTerminalParser: TerminalParser {
 
     private func currentParameterDigitCount(in buffer: String) -> Int {
         buffer.reversed().prefix { $0.isNumber }.count
+    }
+
+    private func parseParameters(_ buffer: String) -> [Int] {
+        let parameters = buffer.components(separatedBy: ";").map { Int($0) ?? 0 }
+        return parameters.isEmpty ? [0] : parameters
+    }
+
+    private func cursorParameter(_ parameters: [Int], at index: Int) -> Int {
+        guard index < parameters.count else {
+            return 1
+        }
+        return parameters[index] == 0 ? 1 : parameters[index]
+    }
+
+    private func movementParameter(_ parameters: [Int]) -> Int {
+        max(parameters.first ?? 1, 1)
     }
 }
