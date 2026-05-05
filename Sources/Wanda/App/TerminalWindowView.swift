@@ -9,6 +9,13 @@ struct TerminalWindowView: View {
                 snapshot: viewModel.snapshot,
                 onFramePresented: viewModel.framePresented(at:)
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            TerminalInputView { keyEvent in
+                viewModel.handleKey(keyEvent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
 
             if let statusMessage = viewModel.statusMessage {
                 Text(statusMessage)
