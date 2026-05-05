@@ -204,7 +204,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             }
             cleanupStarted = true
             switch storedState {
-            case .exited, .failed:
+            case .exited, .signaled, .failed:
                 return false
             case .running, .terminating:
                 break
@@ -228,11 +228,14 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         case .exited(let status):
             setState(.exited(status))
             return
+        case .signaled(let signal):
+            setState(.signaled(signal))
+            return
         case .alreadyReaped:
             setState(.exited(0))
             return
-        case .failed(let waitErrno):
-            setState(.failed("waitpid failed with errno \(waitErrno)"))
+        case .failed(let reason):
+            setState(.failed(reason))
             return
         case .stillRunning:
             break
@@ -251,11 +254,14 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             case .exited(let status):
                 setState(.exited(status))
                 return
+            case .signaled(let signal):
+                setState(.signaled(signal))
+                return
             case .alreadyReaped:
                 setState(.exited(0))
                 return
-            case .failed(let waitErrno):
-                setState(.failed("waitpid failed with errno \(waitErrno)"))
+            case .failed(let reason):
+                setState(.failed(reason))
                 return
             case .stillRunning:
                 break
@@ -274,10 +280,12 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         switch Self.waitForProcess(childProcessID, options: 0) {
         case .exited(let status):
             setState(.exited(status))
+        case .signaled(let signal):
+            setState(.signaled(signal))
         case .alreadyReaped:
             setState(.exited(0))
-        case .failed(let waitErrno):
-            setState(.failed("waitpid failed with errno \(waitErrno)"))
+        case .failed(let reason):
+            setState(.failed(reason))
         case .stillRunning:
             setState(.failed("waitpid unexpectedly reported a running child"))
         }
@@ -294,7 +302,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         case .terminating:
             reapChildNonblocking()
             return []
-        case .exited, .failed:
+        case .exited, .signaled, .failed:
             return []
         }
 
@@ -410,13 +418,18 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 closeMasterFileDescriptor()
             }
             setState(.exited(status))
+        case .signaled(let signal):
+            if closeMasterOnExit {
+                closeMasterFileDescriptor()
+            }
+            setState(.signaled(signal))
         case .alreadyReaped:
             if closeMasterOnExit {
                 closeMasterFileDescriptor()
             }
             setState(.exited(0))
-        case .failed(let waitErrno):
-            setState(.failed("waitpid failed with errno \(waitErrno)"))
+        case .failed(let reason):
+            setState(.failed(reason))
         case .stillRunning:
             break
         }
@@ -439,10 +452,12 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         switch Self.waitForProcess(childProcessID, options: WNOHANG) {
         case .exited(let status):
             setState(.exited(status))
+        case .signaled(let signal):
+            setState(.signaled(signal))
         case .alreadyReaped:
             setState(.exited(0))
-        case .failed(let waitErrno):
-            setState(.failed("waitpid failed with errno \(waitErrno)"))
+        case .failed(let reason):
+            setState(.failed(reason))
         case .stillRunning:
             setState(.terminating)
         }
@@ -465,7 +480,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             let result = waitpid(processID, &status, options)
 
             if result == processID {
-                return .exited(status)
+                return decodedWaitResult(status)
             }
 
             if result == 0 {
@@ -480,8 +495,21 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 return .alreadyReaped
             }
 
-            return .failed(errno)
+            return .failed("waitpid failed with errno \(errno)")
         }
+    }
+
+    private static func decodedWaitResult(_ status: Int32) -> WaitResult {
+        let statusBits = status & 0x7f
+        if statusBits == 0 {
+            return .exited((status >> 8) & 0xff)
+        }
+
+        if statusBits != 0x7f {
+            return .signaled(statusBits)
+        }
+
+        return .failed("waitpid returned unsupported stopped status \(status)")
     }
 
     @discardableResult
@@ -515,9 +543,10 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
 
 private enum WaitResult {
     case exited(Int32)
+    case signaled(Int32)
     case stillRunning
     case alreadyReaped
-    case failed(Int32)
+    case failed(String)
 }
 
 private enum KillResult {

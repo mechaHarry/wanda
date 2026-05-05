@@ -102,10 +102,10 @@ final class PseudoTerminalTests: XCTestCase {
         pty.terminate()
 
         switch pty.state {
-        case .terminating, .exited:
+        case .terminating, .exited, .signaled:
             break
         case .running, .failed:
-            XCTFail("Expected terminating or exited state after terminate(), got \(pty.state)")
+            XCTFail("Expected non-running state after terminate(), got \(pty.state)")
         }
     }
 
@@ -171,14 +171,34 @@ final class PseudoTerminalTests: XCTestCase {
         try await waitForExitedState(pty)
 
         switch pty.state {
-        case .exited:
-            break
-        case .running, .terminating, .failed:
+        case .exited(let status):
+            XCTAssertEqual(status, 7)
+        case .running, .terminating, .signaled, .failed:
             XCTFail("Expected exited state after shell EOF, got \(pty.state)")
         }
 
         pty.terminate()
         pty.terminate()
+    }
+
+    func testSignalTerminationReportsSignalInsteadOfExitStatus() async throws {
+        let pty = try PosixPseudoTerminal(
+            executablePath: "/usr/bin/perl",
+            arguments: ["perl", "-e", "$| = 1; print \"done\"; select(undef, undef, undef, 0.05); kill 'KILL', $$;"],
+            environment: ["TERM": "xterm-256color", "PS1": ""],
+            size: TerminalSize(columns: 80, rows: 24)
+        )
+        defer { pty.terminate() }
+
+        _ = try await pty.readUntilString("done", timeoutNanoseconds: 2_000_000_000)
+        try await waitForSignalState(pty)
+
+        switch pty.state {
+        case .signaled(let signal):
+            XCTAssertEqual(signal, SIGKILL)
+        case .running, .terminating, .exited, .failed:
+            XCTFail("Expected signaled state after child killed itself, got \(pty.state)")
+        }
     }
 
     func testReadEOFWaitsForNaturalChildExitWithoutLeavingTerminatingState() async throws {
@@ -202,7 +222,7 @@ final class PseudoTerminalTests: XCTestCase {
         switch pty.state {
         case .exited:
             break
-        case .running, .terminating, .failed:
+        case .running, .terminating, .signaled, .failed:
             XCTFail("Expected EOF cleanup to reap child instead of leaving \(pty.state)")
         }
 
@@ -265,7 +285,7 @@ final class PseudoTerminalTests: XCTestCase {
         _ = await terminateTask.result
 
         switch pty.state {
-        case .terminating, .exited:
+        case .terminating, .exited, .signaled:
             break
         case .running, .failed:
             XCTFail("Expected terminate to leave a non-running state, got \(pty.state)")
@@ -297,7 +317,7 @@ final class PseudoTerminalTests: XCTestCase {
             _ = await readTask.result
 
             switch pty.state {
-            case .terminating, .exited:
+            case .terminating, .exited, .signaled:
                 return
             case .failed(let message):
                 XCTFail("Expected EOF read to mark terminating or exited, got failed: \(message)")
@@ -326,11 +346,38 @@ final class PseudoTerminalTests: XCTestCase {
                 return
             case .running, .terminating:
                 break
+            case .signaled(let signal):
+                XCTFail("Expected exited state, got signal \(signal)")
+                return
             }
 
             try await Task.sleep(nanoseconds: 1_000_000)
         }
 
         XCTFail("Timed out waiting for exited state, got \(pty.state)")
+    }
+
+    private func waitForSignalState(
+        _ pty: PosixPseudoTerminal,
+        timeoutNanoseconds: UInt64 = 2_000_000_000
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            _ = try pty.readAvailableBytes()
+
+            switch pty.state {
+            case .signaled:
+                return
+            case .failed(let message):
+                XCTFail("Expected signaled state, got failed: \(message)")
+                return
+            case .running, .terminating, .exited:
+                break
+            }
+
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        XCTFail("Timed out waiting for signaled state, got \(pty.state)")
     }
 }

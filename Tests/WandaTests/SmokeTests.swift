@@ -238,6 +238,20 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(viewModel.debugHasOutputTask)
     }
 
+    func testOutputPumpReportsSignaledPTYStatus() async {
+        let pty = FakePseudoTerminal(readResults: [.emptyAndSetState(.signaled(SIGKILL))])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let reportedSignal = await waitForCondition {
+            viewModel.statusMessage == "Shell terminated by signal \(SIGKILL)."
+        }
+
+        XCTAssertTrue(reportedSignal)
+        XCTAssertFalse(viewModel.debugHasOutputTask)
+    }
+
     func testOutputPumpDrivesFollowUpReadsForTerminatingPTYUntilExited() async {
         let pty = FakePseudoTerminal(readResults: [
             .bytes(Array("z".utf8)),
@@ -255,7 +269,26 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertTrue(reaped)
         XCTAssertEqual(viewModel.snapshot?.cells[0].character, "z")
+        XCTAssertEqual(viewModel.statusMessage, "Shell exited with status 0.")
         XCTAssertGreaterThanOrEqual(pty.readCallCount, 4)
+        XCTAssertEqual(pty.terminateCallCount, 0)
+    }
+
+    func testOutputPumpDrivesFollowUpReadsForTerminatingPTYUntilSignaled() async {
+        let pty = FakePseudoTerminal(readResults: [
+            .emptyAndSetState(.terminating),
+            .emptyAndSetState(.signaled(SIGKILL)),
+        ])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let reportedSignal = await waitForCondition {
+            viewModel.statusMessage == "Shell terminated by signal \(SIGKILL)." && !viewModel.debugHasOutputTask
+        }
+
+        XCTAssertTrue(reportedSignal)
+        XCTAssertGreaterThanOrEqual(pty.readCallCount, 2)
         XCTAssertEqual(pty.terminateCallCount, 0)
     }
 

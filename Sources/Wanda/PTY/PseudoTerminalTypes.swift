@@ -16,6 +16,7 @@ public enum PseudoTerminalState: Equatable, Sendable {
     case running
     case terminating
     case exited(Int32)
+    case signaled(Int32)
     case failed(String)
 }
 

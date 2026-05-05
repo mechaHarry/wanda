@@ -300,7 +300,13 @@ public final class TerminalViewModel: ObservableObject {
                     switch terminatingResult {
                     case .running:
                         continue pumpLoop
-                    case .finished, .cancelled:
+                    case .finished:
+                        let state = terminal.state
+                        await MainActor.run { [weak self] in
+                            self?.reportTerminalCompletion(state)
+                        }
+                        break pumpLoop
+                    case .cancelled:
                         break pumpLoop
                     case .timedOut:
                         terminal.terminate()
@@ -318,12 +324,17 @@ public final class TerminalViewModel: ObservableObject {
                     }
                 case .exited(let status):
                     await MainActor.run { [weak self] in
-                        self?.statusMessage = "Shell exited with status \(status)."
+                        self?.reportTerminalCompletion(.exited(status))
+                    }
+                    break pumpLoop
+                case .signaled(let signal):
+                    await MainActor.run { [weak self] in
+                        self?.reportTerminalCompletion(.signaled(signal))
                     }
                     break pumpLoop
                 case .failed(let reason):
                     await MainActor.run { [weak self] in
-                        self?.statusMessage = "Shell failed: \(reason)."
+                        self?.reportTerminalCompletion(.failed(reason))
                     }
                     break pumpLoop
                 }
@@ -340,6 +351,19 @@ public final class TerminalViewModel: ObservableObject {
             await MainActor.run { [weak self] in
                 self?.finishOutputPump(id: taskID)
             }
+        }
+    }
+
+    private func reportTerminalCompletion(_ state: PseudoTerminalState) {
+        switch state {
+        case .running, .terminating:
+            break
+        case .exited(let status):
+            statusMessage = "Shell exited with status \(status)."
+        case .signaled(let signal):
+            statusMessage = "Shell terminated by signal \(signal)."
+        case .failed(let reason):
+            statusMessage = "Shell failed: \(reason)."
         }
     }
 
@@ -438,7 +462,7 @@ private func driveTerminatingOutputPump(
         switch terminal.state {
         case .running:
             return .running
-        case .exited, .failed:
+        case .exited, .signaled, .failed:
             return .finished
         case .terminating:
             if attemptIndex < attemptCount - 1 {
@@ -454,7 +478,7 @@ private func driveTerminatingOutputPump(
     switch terminal.state {
     case .running:
         return .running
-    case .exited, .failed:
+    case .exited, .signaled, .failed:
         return .finished
     case .terminating:
         return .timedOut
