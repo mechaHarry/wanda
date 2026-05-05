@@ -6,6 +6,7 @@
 pid_t wanda_pty_fork_exec(
     int master_fd,
     int slave_fd,
+    int close_limit,
     const char *executable,
     char *const argv[],
     char *const envp[]
@@ -37,8 +38,8 @@ pid_t wanda_pty_fork_exec(
         _exit(127);
     }
 
-    if (slave_fd > STDERR_FILENO) {
-        close(slave_fd);
+    for (int fd = STDERR_FILENO + 1; fd < close_limit; fd++) {
+        close(fd);
     }
 
     execve(executable, argv, envp);

@@ -81,6 +81,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
 
         argumentPointers.append(nil)
         environmentPointers.append(nil)
+        let closeLimit = Self.openFileDescriptorCloseLimit()
 
         defer {
             free(executablePointer)
@@ -94,7 +95,14 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
 
         let pid = argumentPointers.withUnsafeMutableBufferPointer { argvBuffer in
             environmentPointers.withUnsafeMutableBufferPointer { envpBuffer in
-                wanda_pty_fork_exec(master, slave, executablePointer, argvBuffer.baseAddress, envpBuffer.baseAddress)
+                wanda_pty_fork_exec(
+                    master,
+                    slave,
+                    closeLimit,
+                    executablePointer,
+                    argvBuffer.baseAddress,
+                    envpBuffer.baseAddress
+                )
             }
         }
         guard pid >= 0 else {
@@ -429,15 +437,30 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
 
     @discardableResult
     private static func killProcess(_ processID: pid_t, signal: Int32) -> KillResult {
-        if kill(processID, signal) == 0 {
-            return .sent
+        while true {
+            if kill(processID, signal) == 0 {
+                return .sent
+            }
+
+            if errno == EINTR {
+                continue
+            }
+
+            if errno == ESRCH {
+                return .alreadyExited
+            }
+
+            return .failed(errno)
+        }
+    }
+
+    private static func openFileDescriptorCloseLimit() -> Int32 {
+        let openMax = sysconf(_SC_OPEN_MAX)
+        if openMax > 0 && openMax <= Int(Int32.max) {
+            return Int32(openMax)
         }
 
-        if errno == ESRCH {
-            return .alreadyExited
-        }
-
-        return .failed(errno)
+        return Int32(getdtablesize())
     }
 }
 

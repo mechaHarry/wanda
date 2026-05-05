@@ -40,16 +40,14 @@ final class PseudoTerminalTests: XCTestCase {
         )
         defer { pty.terminate() }
 
-        let command = "printf PROCESS_WANDA_MARKER\n"
-        try pty.write(Array("stty -echo\n".utf8))
-        try await Task.sleep(nanoseconds: 50_000_000)
-        _ = try pty.readAvailableBytes()
+        let marker = "PROCESS_WANDA_MARKER"
+        let command = "printf '\\120\\122\\117\\103\\105\\123\\123\\137\\127\\101\\116\\104\\101\\137\\115\\101\\122\\113\\105\\122'\n"
+        XCTAssertFalse(command.contains(marker))
 
         try pty.write(Array(command.utf8))
-        let output = try await pty.readUntilString("PROCESS_WANDA_MARKER", timeoutNanoseconds: 2_000_000_000)
+        let output = try await pty.readUntilString(marker, timeoutNanoseconds: 2_000_000_000)
 
-        XCTAssertTrue(output.contains("PROCESS_WANDA_MARKER"))
-        XCTAssertFalse(output.contains(command.trimmingCharacters(in: .newlines)))
+        XCTAssertTrue(output.contains(marker))
     }
 
     func testResizeUpdatesStoredSize() throws {
