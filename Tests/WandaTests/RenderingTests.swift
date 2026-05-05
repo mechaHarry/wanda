@@ -1,4 +1,6 @@
+import Foundation
 import Metal
+import MetalKit
 import XCTest
 @testable import Wanda
 
@@ -55,5 +57,58 @@ extension RenderingTests {
         renderer.update(snapshot: TerminalRendererSnapshot(model: model))
 
         XCTAssertEqual(renderer.lastSnapshot?.cells.first?.character, "A")
+    }
+
+    @MainActor
+    func testTerminalMetalViewUsesOnDemandConfiguration() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let view = try TerminalMetalView()
+
+        XCTAssertEqual(view.colorPixelFormat, .bgra8Unorm)
+        XCTAssertTrue(view.framebufferOnly)
+        XCTAssertTrue(view.enableSetNeedsDisplay)
+        XCTAssertTrue(view.isPaused)
+        XCTAssertTrue(view.delegate === view.terminalRenderer)
+        XCTAssertTrue(view.device === view.terminalRenderer.device)
+    }
+
+    func testMetalRendererFrameCallbackRunsOnMainActor() async throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let expectation = expectation(description: "frame callback")
+        let probe = FrameCallbackProbe()
+        let renderer = try TerminalMetalRenderer(device: device) { _ in
+            probe.recordCallbackThread()
+            expectation.fulfill()
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            renderer.notifyFramePresentedForTesting(timestamp: 1)
+        }
+        await fulfillment(of: [expectation], timeout: 1)
+
+        XCTAssertTrue(probe.wasCallbackOnMainThread)
+    }
+}
+
+private final class FrameCallbackProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var callbackWasOnMainThread = false
+
+    var wasCallbackOnMainThread: Bool {
+        lock.withLock {
+            callbackWasOnMainThread
+        }
+    }
+
+    func recordCallbackThread() {
+        lock.withLock {
+            callbackWasOnMainThread = Thread.isMainThread
+        }
     }
 }

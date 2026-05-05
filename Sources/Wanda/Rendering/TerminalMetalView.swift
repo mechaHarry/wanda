@@ -18,8 +18,8 @@ public final class TerminalMetalView: MTKView {
         colorPixelFormat = .bgra8Unorm
         clearColor = MTLClearColor(red: 0.02, green: 0.02, blue: 0.025, alpha: 1)
         framebufferOnly = true
-        enableSetNeedsDisplay = false
-        isPaused = false
+        enableSetNeedsDisplay = true
+        isPaused = true
         delegate = terminalRenderer
     }
 
