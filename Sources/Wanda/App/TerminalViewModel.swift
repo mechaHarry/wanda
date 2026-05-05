@@ -7,6 +7,7 @@ public final class TerminalViewModel: ObservableObject {
     @Published public private(set) var statusMessage: String?
 
     private static let maxPendingLatencyIDs = 128
+    private static let maxOutputBatchBytes = 64 * 1024
 
     private var parser: any TerminalParser
     private var model: TerminalModel
@@ -163,6 +164,7 @@ public final class TerminalViewModel: ObservableObject {
 
         nextOutputTaskID += 1
         let taskID = nextOutputTaskID
+        let maxOutputBatchBytes = Self.maxOutputBatchBytes
         outputTaskID = taskID
         outputTask = Task.detached(priority: .userInitiated) { [weak self, terminal] in
             while !Task.isCancelled {
@@ -172,18 +174,25 @@ public final class TerminalViewModel: ObservableObject {
 
                 var drainedBytes: [UInt8] = []
                 var pendingError: Error?
+                var shouldSleepAfterBatch = false
+                var shouldStop = false
 
                 while !Task.isCancelled {
                     do {
                         let bytes = try terminal.readAvailableBytes(maxBytes: 4096)
 
                         if bytes.isEmpty {
+                            shouldSleepAfterBatch = true
                             break
                         }
 
                         drainedBytes.append(contentsOf: bytes)
+
+                        if drainedBytes.count >= maxOutputBatchBytes {
+                            break
+                        }
                     } catch is CancellationError {
-                        pendingError = nil
+                        shouldStop = true
                         break
                     } catch {
                         pendingError = error
@@ -205,6 +214,10 @@ public final class TerminalViewModel: ObservableObject {
                     }
                 }
 
+                if shouldStop || Task.isCancelled {
+                    break
+                }
+
                 if let pendingError {
                     guard !Task.isCancelled else {
                         break
@@ -221,10 +234,12 @@ public final class TerminalViewModel: ObservableObject {
                     break
                 }
 
-                do {
-                    try await Task.sleep(nanoseconds: 5_000_000)
-                } catch {
-                    break
+                if shouldSleepAfterBatch {
+                    do {
+                        try await Task.sleep(nanoseconds: 5_000_000)
+                    } catch {
+                        break
+                    }
                 }
             }
 

@@ -143,6 +143,32 @@ final class SmokeTests: XCTestCase {
         viewModel.stop()
     }
 
+    func testOutputPumpBoundsLargeBurstIntoMultipleBatches() async {
+        let chunk = [UInt8](repeating: Character("x").asciiValue!, count: 4_096)
+        let chunkCount = 20
+        let totalByteCount = chunk.count * chunkCount
+        let pty = FakePseudoTerminal(
+            readResults: Array(repeating: .bytes(chunk), count: chunkCount) + [.empty]
+        )
+        let viewModel = TerminalViewModel(
+            columns: totalByteCount + 1,
+            rows: 1,
+            scrollbackLimit: 10,
+            pty: pty
+        )
+
+        viewModel.startDefaultShell()
+
+        let rendered = await waitForCondition {
+            viewModel.snapshot?.cells[totalByteCount - 1].character == "x"
+        }
+
+        XCTAssertTrue(rendered)
+        XCTAssertEqual(pty.readCallCount, chunkCount + 1)
+        XCTAssertGreaterThan(viewModel.debugOutputPumpBatchCount, 1)
+        viewModel.stop()
+    }
+
     func testOutputPumpReadFailureSetsStatusMessage() async {
         let pty = FakePseudoTerminal(readResults: [.failure(.readFailed(EBADF))])
         let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
