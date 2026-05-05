@@ -49,4 +49,19 @@ final class LatencyProbeTests: XCTestCase {
 
         XCTAssertEqual(measurement.keystrokeToPresentNanoseconds, 80)
     }
+
+    func testOutOfOrderTimestampsHaveNilDurationAndDoNotContributeToP95() {
+        var probe = LatencyProbe()
+        let invalidID = probe.recordKeyReceived(at: 200)
+        let validID = probe.recordKeyReceived(at: 300)
+
+        probe.recordFramePresented(for: invalidID, at: 100)
+        probe.recordFramePresented(for: validID, at: 325)
+
+        let summary = probe.summary()
+
+        XCTAssertNil(probe.completedMeasurements[0].keystrokeToPresentNanoseconds)
+        XCTAssertEqual(summary.count, 2)
+        XCTAssertEqual(summary.p95Nanoseconds, 25)
+    }
 }

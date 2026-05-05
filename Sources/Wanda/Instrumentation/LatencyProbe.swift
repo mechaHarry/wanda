@@ -22,7 +22,7 @@ public struct LatencyMeasurement: Equatable, Sendable {
     }
 
     public var keystrokeToPresentNanoseconds: UInt64? {
-        guard let framePresented else {
+        guard let framePresented, framePresented >= keyReceived else {
             return nil
         }
         return framePresented - keyReceived
