@@ -4,18 +4,16 @@ import Foundation
 @_silgen_name("fork")
 private func cFork() -> pid_t
 
-protocol PseudoTerminal: AnyObject {
+public protocol PseudoTerminal: AnyObject, Sendable {
     var currentSize: TerminalSize { get }
     var state: PseudoTerminalState { get }
 
     func write(_ bytes: [UInt8]) throws
     func resize(_ size: TerminalSize) throws
     func terminate()
-    func readAvailableBytes() throws -> [UInt8]
-    func readUntilString(_ string: String, timeoutNanoseconds: UInt64) async throws -> String
 }
 
-final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
+public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
     private let fdLock = NSLock()
     private let sizeLock = NSLock()
     private let stateLock = NSLock()
@@ -26,15 +24,15 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
     private var storedState: PseudoTerminalState = .running
     private var cleanupStarted = false
 
-    var currentSize: TerminalSize {
+    public var currentSize: TerminalSize {
         sizeLock.withLock { storedSize }
     }
 
-    var state: PseudoTerminalState {
+    public var state: PseudoTerminalState {
         stateLock.withLock { storedState }
     }
 
-    init(
+    public init(
         executablePath: String,
         arguments: [String],
         environment: [String: String],
@@ -43,21 +41,20 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         var master: Int32 = -1
         var slave: Int32 = -1
         var windowSize = winsize(
-            ws_row: size.rows,
-            ws_col: size.columns,
+            ws_row: UInt16(clamping: size.rows),
+            ws_col: UInt16(clamping: size.columns),
             ws_xpixel: 0,
             ws_ypixel: 0
         )
 
         guard openpty(&master, &slave, nil, nil, &windowSize) == 0 else {
-            throw PseudoTerminalError.openFailed(errno: errno)
+            throw PseudoTerminalError.openFailed
         }
 
         guard let executablePointer = strdup(executablePath) else {
-            let allocationErrno = errno == 0 ? ENOMEM : errno
             close(master)
             close(slave)
-            throw PseudoTerminalError.configureFailed(errno: allocationErrno)
+            throw PseudoTerminalError.execFailed
         }
 
         var argumentPointers = arguments.map { strdup($0) }
@@ -66,7 +63,6 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         guard !argumentPointers.contains(where: { $0 == nil }),
               !environmentPointers.contains(where: { $0 == nil })
         else {
-            let allocationErrno = errno == 0 ? ENOMEM : errno
             free(executablePointer)
             for pointer in argumentPointers where pointer != nil {
                 free(pointer)
@@ -76,7 +72,7 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             }
             close(master)
             close(slave)
-            throw PseudoTerminalError.configureFailed(errno: allocationErrno)
+            throw PseudoTerminalError.execFailed
         }
 
         argumentPointers.append(nil)
@@ -94,10 +90,9 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
 
         let pid = cFork()
         guard pid >= 0 else {
-            let forkErrno = errno
             close(master)
             close(slave)
-            throw PseudoTerminalError.forkFailed(errno: forkErrno)
+            throw PseudoTerminalError.forkFailed
         }
 
         if pid == 0 {
@@ -133,11 +128,10 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
 
         let flags = fcntl(master, F_GETFL)
         guard flags >= 0, fcntl(master, F_SETFL, flags | O_NONBLOCK) >= 0 else {
-            let configureErrno = errno
             close(master)
             kill(pid, SIGKILL)
             waitpid(pid, nil, 0)
-            throw PseudoTerminalError.configureFailed(errno: configureErrno)
+            throw PseudoTerminalError.openFailed
         }
 
         masterFileDescriptor = master
@@ -149,12 +143,12 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         terminate()
     }
 
-    func write(_ bytes: [UInt8]) throws {
-        try ensureRunning()
+    public func write(_ bytes: [UInt8]) throws {
+        try ensureCanWrite()
 
         var writtenCount = 0
         try fdLock.withLock {
-            let fd = try openMasterFileDescriptor()
+            let fd = try openMasterFileDescriptor(closedError: .writeFailed(EBADF))
             while writtenCount < bytes.count {
                 let result = bytes.withUnsafeBytes { buffer in
                     Darwin.write(fd, buffer.baseAddress!.advanced(by: writtenCount), bytes.count - writtenCount)
@@ -174,23 +168,23 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                     continue
                 }
 
-                throw PseudoTerminalError.writeFailed(errno: errno)
+                throw PseudoTerminalError.writeFailed(errno)
             }
         }
     }
 
-    func resize(_ size: TerminalSize) throws {
+    public func resize(_ size: TerminalSize) throws {
         var windowSize = winsize(
-            ws_row: size.rows,
-            ws_col: size.columns,
+            ws_row: UInt16(clamping: size.rows),
+            ws_col: UInt16(clamping: size.columns),
             ws_xpixel: 0,
             ws_ypixel: 0
         )
 
         try fdLock.withLock {
-            let fd = try openMasterFileDescriptor()
+            let fd = try openMasterFileDescriptor(closedError: .resizeFailed(EBADF))
             guard ioctl(fd, TIOCSWINSZ, &windowSize) >= 0 else {
-                throw PseudoTerminalError.resizeFailed(errno: errno)
+                throw PseudoTerminalError.resizeFailed(errno)
             }
         }
 
@@ -199,13 +193,13 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         }
     }
 
-    func terminate() {
+    public func terminate() {
         let shouldCleanup = stateLock.withLock {
             if cleanupStarted {
                 return false
             }
             cleanupStarted = true
-            storedState = .terminated
+            storedState = .terminating
             return true
         }
 
@@ -220,34 +214,53 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             }
         }
 
-        if waitpid(childProcessID, nil, WNOHANG) == childProcessID {
+        var status: Int32 = 0
+        if waitpid(childProcessID, &status, WNOHANG) == childProcessID {
+            setState(.exited(status))
             return
         }
 
         kill(childProcessID, SIGTERM)
 
         for _ in 0..<20 {
-            if waitpid(childProcessID, nil, WNOHANG) == childProcessID {
+            status = 0
+            if waitpid(childProcessID, &status, WNOHANG) == childProcessID {
+                setState(.exited(status))
                 return
             }
             usleep(10_000)
         }
 
         kill(childProcessID, SIGKILL)
-        waitpid(childProcessID, nil, 0)
+        status = 0
+        if waitpid(childProcessID, &status, 0) == childProcessID {
+            setState(.exited(status))
+        } else {
+            setState(.failed("waitpid failed with errno \(errno)"))
+        }
     }
 
-    func readAvailableBytes() throws -> [UInt8] {
-        try ensureRunning()
+    public func readAvailableBytes(maxBytes: Int = 4096) throws -> [UInt8] {
+        try ensureCanRead()
+
+        guard maxBytes > 0 else {
+            return []
+        }
 
         var output: [UInt8] = []
-        var buffer = [UInt8](repeating: 0, count: 4096)
+        var buffer = [UInt8](repeating: 0, count: min(maxBytes, 4096))
 
         try fdLock.withLock {
-            let fd = try openMasterFileDescriptor()
+            let fd = try openMasterFileDescriptor(closedError: .readFailed(EBADF))
 
             while true {
-                let result = Darwin.read(fd, &buffer, buffer.count)
+                let remainingByteCount = maxBytes - output.count
+                if remainingByteCount <= 0 {
+                    break
+                }
+
+                let readByteCount = min(buffer.count, remainingByteCount)
+                let result = Darwin.read(fd, &buffer, readByteCount)
 
                 if result > 0 {
                     output.append(contentsOf: buffer.prefix(result))
@@ -255,7 +268,7 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 }
 
                 if result == 0 {
-                    markTerminated()
+                    setState(.terminating)
                     break
                 }
 
@@ -268,18 +281,18 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 }
 
                 if errno == EIO {
-                    markTerminated()
+                    setState(.terminating)
                     break
                 }
 
-                throw PseudoTerminalError.readFailed(errno: errno)
+                throw PseudoTerminalError.readFailed(errno)
             }
         }
 
         return output
     }
 
-    func readUntilString(_ string: String, timeoutNanoseconds: UInt64) async throws -> String {
+    public func readUntilString(_ string: String, timeoutNanoseconds: UInt64) async throws -> String {
         let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
         var bytes: [UInt8] = []
 
@@ -291,8 +304,8 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 return output
             }
 
-            if state == .terminated {
-                throw PseudoTerminalError.processTerminated
+            if state != .running {
+                throw PseudoTerminalError.readFailed(EBADF)
             }
 
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -301,22 +314,28 @@ final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         throw PseudoTerminalError.timedOut
     }
 
-    private func ensureRunning() throws {
-        if state == .terminated {
-            throw PseudoTerminalError.processTerminated
+    private func ensureCanRead() throws {
+        if state != .running {
+            throw PseudoTerminalError.readFailed(EBADF)
         }
     }
 
-    private func openMasterFileDescriptor() throws -> Int32 {
+    private func ensureCanWrite() throws {
+        if state != .running {
+            throw PseudoTerminalError.writeFailed(EBADF)
+        }
+    }
+
+    private func openMasterFileDescriptor(closedError: PseudoTerminalError) throws -> Int32 {
         guard masterFileDescriptor >= 0 else {
-            throw PseudoTerminalError.processTerminated
+            throw closedError
         }
         return masterFileDescriptor
     }
 
-    private func markTerminated() {
+    private func setState(_ state: PseudoTerminalState) {
         stateLock.withLock {
-            storedState = .terminated
+            storedState = state
         }
     }
 }

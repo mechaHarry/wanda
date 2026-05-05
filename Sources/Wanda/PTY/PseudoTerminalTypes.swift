@@ -1,28 +1,30 @@
 import Foundation
 
-struct TerminalSize: Equatable, Sendable {
-    var columns: UInt16
-    var rows: UInt16
+public struct TerminalSize: Equatable, Sendable {
+    public var columns: Int
+    public var rows: Int
 
-    init(columns: UInt16, rows: UInt16) {
+    public init(columns: Int, rows: Int) {
+        precondition(columns > 0, "Terminal columns must be positive")
+        precondition(rows > 0, "Terminal rows must be positive")
         self.columns = columns
         self.rows = rows
     }
 }
 
-enum PseudoTerminalState: Equatable, Sendable {
+public enum PseudoTerminalState: Equatable, Sendable {
     case running
-    case terminated
+    case terminating
+    case exited(Int32)
+    case failed(String)
 }
 
-enum PseudoTerminalError: Error, Equatable, Sendable {
-    case openFailed(errno: Int32)
-    case forkFailed(errno: Int32)
-    case configureFailed(errno: Int32)
-    case writeFailed(errno: Int32)
-    case readFailed(errno: Int32)
-    case resizeFailed(errno: Int32)
-    case processTerminated
+public enum PseudoTerminalError: Error, Equatable {
+    case openFailed
+    case forkFailed
+    case execFailed
+    case writeFailed(Int32)
+    case readFailed(Int32)
+    case resizeFailed(Int32)
     case timedOut
-    case invalidOutputEncoding
 }
