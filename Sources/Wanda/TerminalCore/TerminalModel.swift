@@ -83,6 +83,21 @@ public struct TerminalModel: Equatable, Sendable {
         return drainedRows
     }
 
+    public mutating func resize(columns: Int, rows: Int) {
+        precondition(columns > 0, "TerminalModel columns must be positive")
+        precondition(rows > 0, "TerminalModel rows must be positive")
+
+        primaryGrid.resize(columns: columns, rows: rows)
+        alternateGrid.resize(columns: columns, rows: rows)
+
+        primaryCursor = clampedCursor(primaryCursor, columns: columns, rows: rows)
+        alternateCursor = clampedCursor(alternateCursor, columns: columns, rows: rows)
+        primaryPendingWrap = false
+        alternatePendingWrap = false
+        restoreCursor()
+        dirtyRows = Set(0..<visibleGrid.rows)
+    }
+
     private mutating func print(_ character: Character) {
         if pendingWrap {
             setPendingWrap(false)
@@ -207,6 +222,13 @@ public struct TerminalModel: Equatable, Sendable {
 
     private mutating func restoreCursor() {
         cursor = isUsingAlternateScreen ? alternateCursor : primaryCursor
+    }
+
+    private func clampedCursor(_ point: TerminalPoint, columns: Int, rows: Int) -> TerminalPoint {
+        TerminalPoint(
+            column: min(max(point.column, 0), columns - 1),
+            row: min(max(point.row, 0), rows - 1)
+        )
     }
 
     private var pendingWrap: Bool {

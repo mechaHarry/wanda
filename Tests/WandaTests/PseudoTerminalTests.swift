@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import Wanda
 
@@ -152,20 +153,20 @@ final class PseudoTerminalTests: XCTestCase {
     }
 
     func testReadEOFReapsChildAndLeavesNonRunningState() async throws {
+        let markerPath = "/tmp/wanda-pty-eof-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: markerPath) }
+
         let pty = try PosixPseudoTerminal(
             executablePath: "/bin/sh",
-            arguments: ["sh", "-c", "printf done; exit 7"],
+            arguments: ["sh", "-c", "printf done; exec </dev/null >/dev/null 2>/dev/null; : > \(markerPath); exit 7"],
             environment: ["TERM": "xterm-256color", "PS1": ""],
             size: TerminalSize(columns: 80, rows: 24)
         )
         defer { pty.terminate() }
 
         _ = try await pty.readUntilString("done", timeoutNanoseconds: 2_000_000_000)
-
-        for _ in 0..<100 where pty.state == .running {
-            _ = try pty.readAvailableBytes()
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
+        try await waitForFile(atPath: markerPath)
+        _ = try pty.readAvailableBytes()
 
         switch pty.state {
         case .exited:
@@ -176,5 +177,43 @@ final class PseudoTerminalTests: XCTestCase {
 
         pty.terminate()
         pty.terminate()
+    }
+
+    func testReadEOFWaitsForNaturalChildExitWithoutLeavingTerminatingState() async throws {
+        let markerPath = "/tmp/wanda-pty-eof-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: markerPath) }
+
+        let pty = try PosixPseudoTerminal(
+            executablePath: "/bin/sh",
+            arguments: ["sh", "-c", "printf done; exec </dev/null >/dev/null 2>/dev/null; : > \(markerPath); exit 7"],
+            environment: ["TERM": "xterm-256color", "PS1": ""],
+            size: TerminalSize(columns: 80, rows: 24)
+        )
+        defer { pty.terminate() }
+
+        _ = try await pty.readUntilString("done", timeoutNanoseconds: 2_000_000_000)
+        try await waitForFile(atPath: markerPath)
+        _ = try pty.readAvailableBytes()
+
+        switch pty.state {
+        case .exited:
+            break
+        case .running, .terminating, .failed:
+            XCTFail("Expected EOF cleanup to reap child instead of leaving \(pty.state)")
+        }
+
+        XCTAssertNoThrow(try pty.readAvailableBytes())
+    }
+
+    private func waitForFile(atPath path: String) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + 2_000_000_000
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            if FileManager.default.fileExists(atPath: path) {
+                return
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        XCTFail("Timed out waiting for \(path)")
     }
 }

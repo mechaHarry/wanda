@@ -45,6 +45,27 @@ public struct TerminalGrid: Equatable, Sendable {
         cells.replaceSubrange(start..<(start + columns), with: newCells)
     }
 
+    public mutating func resize(columns newColumns: Int, rows newRows: Int) {
+        precondition(newColumns > 0, "TerminalGrid columns must be positive")
+        precondition(newRows > 0, "TerminalGrid rows must be positive")
+
+        var resizedCells = Array(repeating: TerminalCell.blank, count: newColumns * newRows)
+        let copiedRows = min(rows, newRows)
+        let copiedColumns = min(columns, newColumns)
+
+        for row in 0..<copiedRows {
+            for column in 0..<copiedColumns {
+                let oldIndex = row * columns + column
+                let newIndex = row * newColumns + column
+                resizedCells[newIndex] = cells[oldIndex]
+            }
+        }
+
+        columns = newColumns
+        rows = newRows
+        cells = resizedCells
+    }
+
     public mutating func scrollUpOneLine() -> [TerminalCell] {
         let removed = rowCells(0)
         for row in 1..<rows {

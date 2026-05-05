@@ -17,6 +17,7 @@ public final class TerminalViewModel: ObservableObject {
     private var outputTask: Task<Void, Never>?
     private var outputTaskID: Int?
     private var nextOutputTaskID = 0
+    private var outputPumpBatchCount = 0
 
     var debugActiveLatencyCount: Int {
         latencyProbe.activeMeasurementCount
@@ -36,6 +37,10 @@ public final class TerminalViewModel: ObservableObject {
 
     var debugHasOutputTask: Bool {
         outputTask != nil
+    }
+
+    var debugOutputPumpBatchCount: Int {
+        outputPumpBatchCount
     }
 
     public convenience init(columns: Int = 80, rows: Int = 24, scrollbackLimit: Int = 2_000) {
@@ -120,7 +125,11 @@ public final class TerminalViewModel: ObservableObject {
             try pty?.resize(TerminalSize(columns: columns, rows: rows))
         } catch {
             statusMessage = "Failed to resize terminal: \(error)"
+            return
         }
+
+        model.resize(columns: columns, rows: rows)
+        snapshot = TerminalRendererSnapshot(model: model)
     }
 
     public nonisolated func framePresented(at timestamp: UInt64) {
@@ -161,34 +170,60 @@ public final class TerminalViewModel: ObservableObject {
                     break
                 }
 
-                do {
-                    let bytes = try terminal.readAvailableBytes(maxBytes: 4096)
+                var drainedBytes: [UInt8] = []
+                var pendingError: Error?
 
+                while !Task.isCancelled {
+                    do {
+                        let bytes = try terminal.readAvailableBytes(maxBytes: 4096)
+
+                        if bytes.isEmpty {
+                            break
+                        }
+
+                        drainedBytes.append(contentsOf: bytes)
+                    } catch is CancellationError {
+                        pendingError = nil
+                        break
+                    } catch {
+                        pendingError = error
+                        break
+                    }
+                }
+
+                if !drainedBytes.isEmpty {
                     if Task.isCancelled {
                         break
                     }
 
-                    if !bytes.isEmpty {
-                        await MainActor.run { [weak self] in
-                            guard !Task.isCancelled else {
-                                return
-                            }
-                            self?.processOutput(bytes)
+                    await MainActor.run { [weak self] in
+                        guard !Task.isCancelled else {
+                            return
                         }
+                        self?.processOutput(drainedBytes)
+                        self?.outputPumpBatchCount += 1
                     }
+                }
 
-                    try await Task.sleep(nanoseconds: 5_000_000)
-                } catch is CancellationError {
-                    break
-                } catch {
+                if let pendingError {
                     guard !Task.isCancelled else {
                         break
                     }
 
-                    let message = "Failed to read from terminal: \(error)"
+                    let message = "Failed to read from terminal: \(pendingError)"
                     await MainActor.run { [weak self] in
                         self?.statusMessage = message
                     }
+                    break
+                }
+
+                if terminal.state != .running {
+                    break
+                }
+
+                do {
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                } catch {
                     break
                 }
             }

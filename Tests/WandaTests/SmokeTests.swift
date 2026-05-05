@@ -75,16 +75,35 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertEqual(pty.resizes, [TerminalSize(columns: 100, rows: 40)])
         XCTAssertEqual(pty.currentSize, TerminalSize(columns: 100, rows: 40))
+        XCTAssertEqual(viewModel.snapshot?.columns, 100)
+        XCTAssertEqual(viewModel.snapshot?.rows, 40)
+        XCTAssertNil(viewModel.statusMessage)
+    }
+
+    func testResizeWithoutPTYUpdatesSnapshotDimensions() {
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: nil)
+        viewModel.processOutput(Array("ab".utf8))
+
+        viewModel.resize(columns: 6, rows: 3)
+
+        XCTAssertEqual(viewModel.snapshot?.columns, 6)
+        XCTAssertEqual(viewModel.snapshot?.rows, 3)
+        XCTAssertEqual(viewModel.snapshot?.cells[0].character, "a")
+        XCTAssertEqual(viewModel.snapshot?.cells[1].character, "b")
         XCTAssertNil(viewModel.statusMessage)
     }
 
     func testResizeFailureSetsStatusMessage() {
         let pty = FakePseudoTerminal(resizeError: .resizeFailed(EBADF))
         let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+        let initialColumns = viewModel.snapshot?.columns
+        let initialRows = viewModel.snapshot?.rows
 
         viewModel.resize(columns: 100, rows: 40)
 
         XCTAssertEqual(pty.resizes, [])
+        XCTAssertEqual(viewModel.snapshot?.columns, initialColumns)
+        XCTAssertEqual(viewModel.snapshot?.rows, initialRows)
         XCTAssertTrue(viewModel.statusMessage?.contains("Failed to resize terminal") == true)
     }
 
@@ -100,6 +119,27 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertTrue(rendered)
         XCTAssertGreaterThan(pty.readCallCount, 0)
+        viewModel.stop()
+    }
+
+    func testOutputPumpDrainsQueuedChunksBeforeSleeping() async {
+        let pty = FakePseudoTerminal(readResults: [
+            .bytes(Array("a".utf8)),
+            .bytes(Array("b".utf8)),
+            .bytes(Array("c".utf8)),
+            .empty,
+        ])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let rendered = await waitForCondition {
+            viewModel.snapshot?.cells.prefix(3).map(\.character) == ["a", "b", "c"]
+        }
+
+        XCTAssertTrue(rendered)
+        XCTAssertEqual(pty.readCallCount, 4)
+        XCTAssertEqual(viewModel.debugOutputPumpBatchCount, 1)
         viewModel.stop()
     }
 
@@ -177,6 +217,7 @@ final class SmokeTests: XCTestCase {
 
 private enum FakeReadResult {
     case bytes([UInt8])
+    case empty
     case failure(PseudoTerminalError)
 }
 
@@ -265,6 +306,8 @@ private final class FakePseudoTerminal: PseudoTerminal, @unchecked Sendable {
         switch result {
         case .bytes(let bytes):
             return Array(bytes.prefix(maxBytes))
+        case .empty:
+            return []
         case .failure(let error):
             throw error
         case nil:

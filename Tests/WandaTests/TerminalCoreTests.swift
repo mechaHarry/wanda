@@ -96,6 +96,29 @@ final class TerminalCoreTests: XCTestCase {
         XCTAssertEqual(grid.rowCells(1).map(\.character), ["E", "F"])
         XCTAssertEqual(grid.rowCells(2), [.blank, .blank])
     }
+
+    func testGridResizePreservesOverlappingTopLeftContentAndFillsBlanks() {
+        var grid = TerminalGrid(columns: 3, rows: 2)
+        grid.setCell(TerminalCell(character: "A"), at: TerminalPoint(column: 0, row: 0))
+        grid.setCell(TerminalCell(character: "B"), at: TerminalPoint(column: 2, row: 0))
+        grid.setCell(TerminalCell(character: "C"), at: TerminalPoint(column: 1, row: 1))
+
+        grid.resize(columns: 4, rows: 3)
+
+        XCTAssertEqual(grid.columns, 4)
+        XCTAssertEqual(grid.rows, 3)
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 0, row: 0)).character, "A")
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 2, row: 0)).character, "B")
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 1, row: 1)).character, "C")
+        XCTAssertEqual(grid.cell(at: TerminalPoint(column: 3, row: 0)), .blank)
+        XCTAssertEqual(grid.rowCells(2), [.blank, .blank, .blank, .blank])
+
+        grid.resize(columns: 2, rows: 1)
+
+        XCTAssertEqual(grid.columns, 2)
+        XCTAssertEqual(grid.rows, 1)
+        XCTAssertEqual(grid.rowCells(0).map(\.character), ["A", " "])
+    }
 }
 
 extension TerminalCoreTests {
@@ -347,5 +370,43 @@ extension TerminalCoreTests {
         XCTAssertFalse(model.isUsingAlternateScreen)
         XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
         XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "A")
+    }
+
+    func testModelResizePreservesContentClampsCursorAndMarksVisibleRowsDirty() {
+        var model = TerminalModel(columns: 4, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("A"))
+        model.apply(.moveCursor(row: 1, column: 3))
+        model.apply(.print("B"))
+
+        model.resize(columns: 2, rows: 1)
+
+        XCTAssertEqual(model.visibleGrid.columns, 2)
+        XCTAssertEqual(model.visibleGrid.rows, 1)
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "A")
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+        XCTAssertEqual(model.dirtyRows, Set([0]))
+
+        model.apply(.print("C"))
+
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "C")
+    }
+
+    func testModelResizeKeepsPrimaryAndAlternateScreenDimensionsAligned() {
+        var model = TerminalModel(columns: 3, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("P"))
+        model.apply(.useAlternateScreen(true))
+        model.apply(.print("A"))
+
+        model.resize(columns: 4, rows: 3)
+
+        XCTAssertEqual(model.visibleGrid.columns, 4)
+        XCTAssertEqual(model.visibleGrid.rows, 3)
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "A")
+
+        model.apply(.useAlternateScreen(false))
+
+        XCTAssertEqual(model.visibleGrid.columns, 4)
+        XCTAssertEqual(model.visibleGrid.rows, 3)
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "P")
     }
 }

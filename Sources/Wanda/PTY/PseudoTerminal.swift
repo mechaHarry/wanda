@@ -278,9 +278,11 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
     }
 
     public func readAvailableBytes(maxBytes: Int = 4096) throws -> [UInt8] {
-        try ensureCanRead()
-
         guard maxBytes > 0 else {
+            return []
+        }
+
+        guard state == .running else {
             return []
         }
 
@@ -314,6 +316,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 }
 
                 if errno == EAGAIN || errno == EWOULDBLOCK {
+                    reapExitedChildAfterEmptyReadWithLockHeld()
                     break
                 }
 
@@ -363,12 +366,6 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         throw PseudoTerminalError.timedOut
     }
 
-    private func ensureCanRead() throws {
-        if state != .running {
-            throw PseudoTerminalError.readFailed(EBADF)
-        }
-    }
-
     private func ensureCanWrite() throws {
         if state != .running {
             throw PseudoTerminalError.writeFailed(EBADF)
@@ -382,10 +379,50 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         return masterFileDescriptor
     }
 
-    private func cleanupAfterReadEOFWithLockHeld() {
+    private func reapExitedChildAfterEmptyReadWithLockHeld() {
+        switch Self.waitForProcess(childProcessID, options: WNOHANG) {
+        case .exited(let status):
+            closeMasterFileDescriptorWithLockHeld()
+            setState(.exited(status))
+        case .alreadyReaped:
+            closeMasterFileDescriptorWithLockHeld()
+            setState(.exited(0))
+        case .failed(let waitErrno):
+            setState(.failed("waitpid failed with errno \(waitErrno)"))
+        case .stillRunning:
+            break
+        }
+    }
+
+    private func closeMasterFileDescriptorWithLockHeld() {
         if masterFileDescriptor >= 0 {
             close(masterFileDescriptor)
             masterFileDescriptor = -1
+        }
+    }
+
+    private func cleanupAfterReadEOFWithLockHeld() {
+        closeMasterFileDescriptorWithLockHeld()
+        reapChildAfterEOF()
+    }
+
+    private func reapChildAfterEOF() {
+        setState(.terminating)
+
+        for _ in 0..<20 {
+            switch Self.waitForProcess(childProcessID, options: WNOHANG) {
+            case .exited(let status):
+                setState(.exited(status))
+                return
+            case .alreadyReaped:
+                setState(.exited(0))
+                return
+            case .failed(let waitErrno):
+                setState(.failed("waitpid failed with errno \(waitErrno)"))
+                return
+            case .stillRunning:
+                usleep(10_000)
+            }
         }
 
         switch Self.waitForProcess(childProcessID, options: WNOHANG) {
@@ -393,10 +430,19 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             setState(.exited(status))
         case .alreadyReaped:
             setState(.exited(0))
-        case .stillRunning:
-            setState(.terminating)
         case .failed(let waitErrno):
             setState(.failed("waitpid failed with errno \(waitErrno)"))
+        case .stillRunning:
+            switch Self.waitForProcess(childProcessID, options: 0) {
+            case .exited(let status):
+                setState(.exited(status))
+            case .alreadyReaped:
+                setState(.exited(0))
+            case .failed(let waitErrno):
+                setState(.failed("waitpid failed with errno \(waitErrno)"))
+            case .stillRunning:
+                setState(.failed("waitpid unexpectedly reported a running child after EOF"))
+            }
         }
     }
 
