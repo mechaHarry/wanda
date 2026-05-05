@@ -1,8 +1,6 @@
 import Darwin
 import Foundation
-
-@_silgen_name("fork")
-private func cFork() -> pid_t
+import WandaPTYSpawn
 
 public protocol PseudoTerminal: AnyObject, Sendable {
     var currentSize: TerminalSize { get }
@@ -23,6 +21,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
     private var storedSize: TerminalSize
     private var storedState: PseudoTerminalState = .running
     private var cleanupStarted = false
+    private let writeStallTimeoutNanoseconds: UInt64 = 2_000_000_000
 
     public var currentSize: TerminalSize {
         sizeLock.withLock { storedSize }
@@ -40,9 +39,14 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
     ) throws {
         var master: Int32 = -1
         var slave: Int32 = -1
+
+        guard Self.isValidWinsize(size) else {
+            throw PseudoTerminalError.openFailed
+        }
+
         var windowSize = winsize(
-            ws_row: UInt16(clamping: size.rows),
-            ws_col: UInt16(clamping: size.columns),
+            ws_row: UInt16(size.rows),
+            ws_col: UInt16(size.columns),
             ws_xpixel: 0,
             ws_ypixel: 0
         )
@@ -88,40 +92,15 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             }
         }
 
-        let pid = cFork()
+        let pid = argumentPointers.withUnsafeMutableBufferPointer { argvBuffer in
+            environmentPointers.withUnsafeMutableBufferPointer { envpBuffer in
+                wanda_pty_fork_exec(master, slave, executablePointer, argvBuffer.baseAddress, envpBuffer.baseAddress)
+            }
+        }
         guard pid >= 0 else {
             close(master)
             close(slave)
             throw PseudoTerminalError.forkFailed
-        }
-
-        if pid == 0 {
-            close(master)
-
-            guard setsid() >= 0 else {
-                _exit(127)
-            }
-
-            guard ioctl(slave, TIOCSCTTY, 0) >= 0 else {
-                _exit(127)
-            }
-
-            guard dup2(slave, STDIN_FILENO) >= 0 else {
-                _exit(127)
-            }
-            guard dup2(slave, STDOUT_FILENO) >= 0 else {
-                _exit(127)
-            }
-            guard dup2(slave, STDERR_FILENO) >= 0 else {
-                _exit(127)
-            }
-
-            if slave > STDERR_FILENO {
-                close(slave)
-            }
-
-            execve(executablePointer, &argumentPointers, &environmentPointers)
-            _exit(127)
         }
 
         close(slave)
@@ -129,8 +108,8 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         let flags = fcntl(master, F_GETFL)
         guard flags >= 0, fcntl(master, F_SETFL, flags | O_NONBLOCK) >= 0 else {
             close(master)
-            kill(pid, SIGKILL)
-            waitpid(pid, nil, 0)
+            Self.killProcess(pid, signal: SIGKILL)
+            _ = Self.waitForProcess(pid, options: 0)
             throw PseudoTerminalError.openFailed
         }
 
@@ -147,6 +126,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         try ensureCanWrite()
 
         var writtenCount = 0
+        var stallDeadline = DispatchTime.now().uptimeNanoseconds + writeStallTimeoutNanoseconds
         try fdLock.withLock {
             let fd = try openMasterFileDescriptor(closedError: .writeFailed(EBADF))
             while writtenCount < bytes.count {
@@ -156,6 +136,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
 
                 if result > 0 {
                     writtenCount += result
+                    stallDeadline = DispatchTime.now().uptimeNanoseconds + writeStallTimeoutNanoseconds
                     continue
                 }
 
@@ -164,6 +145,10 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 }
 
                 if result == -1 && (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    let writeErrno = errno
+                    if DispatchTime.now().uptimeNanoseconds >= stallDeadline {
+                        throw PseudoTerminalError.writeFailed(writeErrno)
+                    }
                     usleep(1_000)
                     continue
                 }
@@ -174,9 +159,13 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
     }
 
     public func resize(_ size: TerminalSize) throws {
+        guard Self.isValidWinsize(size) else {
+            throw PseudoTerminalError.resizeFailed(EINVAL)
+        }
+
         var windowSize = winsize(
-            ws_row: UInt16(clamping: size.rows),
-            ws_col: UInt16(clamping: size.columns),
+            ws_row: UInt16(size.rows),
+            ws_col: UInt16(size.columns),
             ws_xpixel: 0,
             ws_ypixel: 0
         )
@@ -199,6 +188,12 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 return false
             }
             cleanupStarted = true
+            switch storedState {
+            case .exited, .failed:
+                return false
+            case .running, .terminating:
+                break
+            }
             storedState = .terminating
             return true
         }
@@ -214,29 +209,62 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
             }
         }
 
-        var status: Int32 = 0
-        if waitpid(childProcessID, &status, WNOHANG) == childProcessID {
+        switch Self.waitForProcess(childProcessID, options: WNOHANG) {
+        case .exited(let status):
             setState(.exited(status))
+            return
+        case .alreadyReaped:
+            setState(.exited(0))
+            return
+        case .failed(let waitErrno):
+            setState(.failed("waitpid failed with errno \(waitErrno)"))
+            return
+        case .stillRunning:
+            break
+        }
+
+        switch Self.killProcess(childProcessID, signal: SIGTERM) {
+        case .sent, .alreadyExited:
+            break
+        case .failed(let killErrno):
+            setState(.failed("kill failed with errno \(killErrno)"))
             return
         }
 
-        kill(childProcessID, SIGTERM)
-
         for _ in 0..<20 {
-            status = 0
-            if waitpid(childProcessID, &status, WNOHANG) == childProcessID {
+            switch Self.waitForProcess(childProcessID, options: WNOHANG) {
+            case .exited(let status):
                 setState(.exited(status))
                 return
+            case .alreadyReaped:
+                setState(.exited(0))
+                return
+            case .failed(let waitErrno):
+                setState(.failed("waitpid failed with errno \(waitErrno)"))
+                return
+            case .stillRunning:
+                break
             }
             usleep(10_000)
         }
 
-        kill(childProcessID, SIGKILL)
-        status = 0
-        if waitpid(childProcessID, &status, 0) == childProcessID {
+        switch Self.killProcess(childProcessID, signal: SIGKILL) {
+        case .sent, .alreadyExited:
+            break
+        case .failed(let killErrno):
+            setState(.failed("kill failed with errno \(killErrno)"))
+            return
+        }
+
+        switch Self.waitForProcess(childProcessID, options: 0) {
+        case .exited(let status):
             setState(.exited(status))
-        } else {
-            setState(.failed("waitpid failed with errno \(errno)"))
+        case .alreadyReaped:
+            setState(.exited(0))
+        case .failed(let waitErrno):
+            setState(.failed("waitpid failed with errno \(waitErrno)"))
+        case .stillRunning:
+            setState(.failed("waitpid unexpectedly reported a running child"))
         }
     }
 
@@ -268,7 +296,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 }
 
                 if result == 0 {
-                    setState(.terminating)
+                    cleanupAfterReadEOFWithLockHeld()
                     break
                 }
 
@@ -281,7 +309,7 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
                 }
 
                 if errno == EIO {
-                    setState(.terminating)
+                    cleanupAfterReadEOFWithLockHeld()
                     break
                 }
 
@@ -292,12 +320,24 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         return output
     }
 
-    public func readUntilString(_ string: String, timeoutNanoseconds: UInt64) async throws -> String {
+    public func readUntilString(
+        _ string: String,
+        timeoutNanoseconds: UInt64,
+        maxCaptureBytes: Int = 1_048_576
+    ) async throws -> String {
+        guard maxCaptureBytes > 0 else {
+            throw PseudoTerminalError.readFailed(ENOMEM)
+        }
+
         let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
         var bytes: [UInt8] = []
 
         while DispatchTime.now().uptimeNanoseconds < deadline {
-            bytes.append(contentsOf: try readAvailableBytes())
+            let availableBytes = try readAvailableBytes()
+            guard bytes.count + availableBytes.count <= maxCaptureBytes else {
+                throw PseudoTerminalError.readFailed(ENOMEM)
+            }
+            bytes.append(contentsOf: availableBytes)
 
             let output = String(decoding: bytes, as: UTF8.self)
             if output.contains(string) {
@@ -333,11 +373,85 @@ public final class PosixPseudoTerminal: PseudoTerminal, @unchecked Sendable {
         return masterFileDescriptor
     }
 
+    private func cleanupAfterReadEOFWithLockHeld() {
+        if masterFileDescriptor >= 0 {
+            close(masterFileDescriptor)
+            masterFileDescriptor = -1
+        }
+
+        switch Self.waitForProcess(childProcessID, options: WNOHANG) {
+        case .exited(let status):
+            setState(.exited(status))
+        case .alreadyReaped:
+            setState(.exited(0))
+        case .stillRunning:
+            setState(.terminating)
+        case .failed(let waitErrno):
+            setState(.failed("waitpid failed with errno \(waitErrno)"))
+        }
+    }
+
     private func setState(_ state: PseudoTerminalState) {
         stateLock.withLock {
             storedState = state
         }
     }
+
+    private static func isValidWinsize(_ size: TerminalSize) -> Bool {
+        size.columns <= Int(UInt16.max) && size.rows <= Int(UInt16.max)
+    }
+
+    private static func waitForProcess(_ processID: pid_t, options: Int32) -> WaitResult {
+        var status: Int32 = 0
+
+        while true {
+            let result = waitpid(processID, &status, options)
+
+            if result == processID {
+                return .exited(status)
+            }
+
+            if result == 0 {
+                return .stillRunning
+            }
+
+            if errno == EINTR {
+                continue
+            }
+
+            if errno == ECHILD {
+                return .alreadyReaped
+            }
+
+            return .failed(errno)
+        }
+    }
+
+    @discardableResult
+    private static func killProcess(_ processID: pid_t, signal: Int32) -> KillResult {
+        if kill(processID, signal) == 0 {
+            return .sent
+        }
+
+        if errno == ESRCH {
+            return .alreadyExited
+        }
+
+        return .failed(errno)
+    }
+}
+
+private enum WaitResult {
+    case exited(Int32)
+    case stillRunning
+    case alreadyReaped
+    case failed(Int32)
+}
+
+private enum KillResult {
+    case sent
+    case alreadyExited
+    case failed(Int32)
 }
 
 extension NSLock {

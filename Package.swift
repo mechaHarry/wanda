@@ -13,10 +13,16 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "Wanda",
+            dependencies: ["WandaPTYSpawn"],
             path: "Sources/Wanda",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")
             ]
+        ),
+        .target(
+            name: "WandaPTYSpawn",
+            path: "Sources/WandaPTYSpawn",
+            publicHeadersPath: "include"
         ),
         .testTarget(
             name: "WandaTests",
