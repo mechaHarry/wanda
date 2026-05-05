@@ -43,6 +43,9 @@ public struct LatencyProbe: Sendable {
     private var nextID = 0
     private var active: [Int: LatencyMeasurement] = [:]
     public private(set) var completedMeasurements: [LatencyMeasurement] = []
+    var activeMeasurementCount: Int {
+        active.count
+    }
 
     public init() {}
 
@@ -53,6 +56,10 @@ public struct LatencyProbe: Sendable {
         nextID += 1
         active[id] = LatencyMeasurement(id: id, keyReceived: timestamp)
         return id
+    }
+
+    mutating func cancel(_ id: Int) {
+        active.removeValue(forKey: id)
     }
 
     public mutating func recordPTYWrite(

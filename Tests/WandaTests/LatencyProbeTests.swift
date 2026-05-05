@@ -40,6 +40,17 @@ final class LatencyProbeTests: XCTestCase {
         XCTAssertEqual(probe.completedMeasurements, [])
     }
 
+    func testCancelRemovesActiveMeasurementWithoutCompleting() {
+        var probe = LatencyProbe()
+        let id = probe.recordKeyReceived(at: 100)
+
+        probe.cancel(id)
+        probe.recordFramePresented(for: id, at: 180)
+
+        XCTAssertEqual(probe.activeMeasurementCount, 0)
+        XCTAssertEqual(probe.completedMeasurements, [])
+    }
+
     func testIncompleteMeasurementHasNilDurationUntilPresented() {
         var measurement = LatencyMeasurement(id: 1, keyReceived: 100)
 
