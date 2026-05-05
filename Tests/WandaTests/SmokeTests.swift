@@ -122,6 +122,32 @@ final class SmokeTests: XCTestCase {
         viewModel.stop()
     }
 
+    func testStartDefaultShellInheritsEnvironmentAndOverridesTerm() {
+        var capturedEnvironment: [String: String]?
+        let viewModel = TerminalViewModel(
+            columns: 4,
+            rows: 2,
+            scrollbackLimit: 10,
+            pty: nil,
+            environment: [
+                "SHELL": "/bin/zsh",
+                "HOME": "/Users/example",
+                "PATH": "/usr/bin"
+            ],
+            terminalFactory: { _, _, environment, size in
+                capturedEnvironment = environment
+                return FakePseudoTerminal(size: size)
+            }
+        )
+
+        viewModel.startDefaultShell()
+        viewModel.stop()
+
+        XCTAssertEqual(capturedEnvironment?["HOME"], "/Users/example")
+        XCTAssertEqual(capturedEnvironment?["PATH"], "/usr/bin")
+        XCTAssertEqual(capturedEnvironment?["TERM"], "xterm-256color")
+    }
+
     func testOutputPumpDrainsQueuedChunksBeforeSleeping() async {
         let pty = FakePseudoTerminal(readResults: [
             .bytes(Array("a".utf8)),
@@ -182,6 +208,34 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(surfacedError)
         XCTAssertFalse(viewModel.debugHasOutputTask)
         viewModel.stop()
+    }
+
+    func testOutputPumpReportsExitedPTYStatus() async {
+        let pty = FakePseudoTerminal(readResults: [.emptyAndSetState(.exited(7))])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let reportedExit = await waitForCondition {
+            viewModel.statusMessage == "Shell exited with status 7."
+        }
+
+        XCTAssertTrue(reportedExit)
+        XCTAssertFalse(viewModel.debugHasOutputTask)
+    }
+
+    func testOutputPumpReportsFailedPTYStatus() async {
+        let pty = FakePseudoTerminal(readResults: [.emptyAndSetState(.failed("fork failed"))])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let reportedFailure = await waitForCondition {
+            viewModel.statusMessage == "Shell failed: fork failed."
+        }
+
+        XCTAssertTrue(reportedFailure)
+        XCTAssertFalse(viewModel.debugHasOutputTask)
     }
 
     func testOutputPumpDrivesFollowUpReadsForTerminatingPTYUntilExited() async {

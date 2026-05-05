@@ -3,6 +3,13 @@ import SwiftUI
 
 @MainActor
 public final class TerminalViewModel: ObservableObject {
+    typealias TerminalFactory = @MainActor (
+        _ executablePath: String,
+        _ arguments: [String],
+        _ environment: [String: String],
+        _ size: TerminalSize
+    ) throws -> any PseudoTerminal
+
     @Published public private(set) var snapshot: TerminalRendererSnapshot?
     @Published public private(set) var statusMessage: String?
     @Published public private(set) var selection: TerminalSelection?
@@ -23,6 +30,8 @@ public final class TerminalViewModel: ObservableObject {
     private var outputTaskID: Int?
     private var nextOutputTaskID = 0
     private var outputPumpBatchCount = 0
+    private let environment: [String: String]
+    private let terminalFactory: TerminalFactory
 
     var debugActiveLatencyCount: Int {
         latencyProbe.activeMeasurementCount
@@ -49,15 +58,31 @@ public final class TerminalViewModel: ObservableObject {
     }
 
     public convenience init(columns: Int = 80, rows: Int = 24, scrollbackLimit: Int = 2_000) {
-        self.init(columns: columns, rows: rows, scrollbackLimit: scrollbackLimit, pty: nil)
+        self.init(
+            columns: columns,
+            rows: rows,
+            scrollbackLimit: scrollbackLimit,
+            pty: nil,
+            environment: ProcessInfo.processInfo.environment,
+            terminalFactory: Self.makePosixPseudoTerminal
+        )
     }
 
-    init(columns: Int, rows: Int, scrollbackLimit: Int, pty: (any PseudoTerminal)?) {
+    init(
+        columns: Int,
+        rows: Int,
+        scrollbackLimit: Int,
+        pty: (any PseudoTerminal)?,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        terminalFactory: @escaping TerminalFactory = TerminalViewModel.makePosixPseudoTerminal
+    ) {
         self.parser = SwiftTerminalParser()
         self.model = TerminalModel(columns: columns, rows: rows, scrollbackLimit: scrollbackLimit)
         self.latencyProbe = LatencyProbe()
         self.keyMapper = TerminalKeyMapper()
         self.pty = pty
+        self.environment = environment
+        self.terminalFactory = terminalFactory
         self.snapshot = TerminalRendererSnapshot(model: model)
     }
 
@@ -67,19 +92,16 @@ public final class TerminalViewModel: ObservableObject {
             return
         }
 
-        let shell = defaultShellPath()
+        var environment = environment
+        environment["TERM"] = "xterm-256color"
+        let shell = defaultShellPath(environment: environment)
         let size = TerminalSize(
             columns: model.visibleGrid.columns,
             rows: model.visibleGrid.rows
         )
 
         do {
-            let terminal = try PosixPseudoTerminal(
-                executablePath: shell,
-                arguments: [shell],
-                environment: ["TERM": "xterm-256color"],
-                size: size
-            )
+            let terminal = try terminalFactory(shell, [shell], environment, size)
             pty = terminal
             startOutputPumpIfNeeded(for: terminal)
             statusMessage = nil
@@ -294,7 +316,15 @@ public final class TerminalViewModel: ObservableObject {
                         }
                         break pumpLoop
                     }
-                case .exited, .failed:
+                case .exited(let status):
+                    await MainActor.run { [weak self] in
+                        self?.statusMessage = "Shell exited with status \(status)."
+                    }
+                    break pumpLoop
+                case .failed(let reason):
+                    await MainActor.run { [weak self] in
+                        self?.statusMessage = "Shell failed: \(reason)."
+                    }
                     break pumpLoop
                 }
 
@@ -338,13 +368,27 @@ public final class TerminalViewModel: ObservableObject {
         pendingLatencyIDs.removeAll()
     }
 
-    private func defaultShellPath() -> String {
-        let shell = ProcessInfo.processInfo.environment["SHELL"]
+    private func defaultShellPath(environment: [String: String]) -> String {
+        let shell = environment["SHELL"]
         guard let shell, !shell.isEmpty else {
             return "/bin/zsh"
         }
 
         return shell
+    }
+
+    private static func makePosixPseudoTerminal(
+        executablePath: String,
+        arguments: [String],
+        environment: [String: String],
+        size: TerminalSize
+    ) throws -> any PseudoTerminal {
+        try PosixPseudoTerminal(
+            executablePath: executablePath,
+            arguments: arguments,
+            environment: environment,
+            size: size
+        )
     }
 
     private func clampedPoint(_ point: TerminalPoint) -> TerminalPoint {

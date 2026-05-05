@@ -7,12 +7,22 @@ public struct TerminalRendererSnapshot: Sendable {
     public var cursor: TerminalPoint
     public var dirtyRows: Set<Int>
 
+    public init(columns: Int, rows: Int, cells: [TerminalCell], cursor: TerminalPoint, dirtyRows: Set<Int>) {
+        self.columns = columns
+        self.rows = rows
+        self.cells = cells
+        self.cursor = cursor
+        self.dirtyRows = dirtyRows
+    }
+
     public init(model: TerminalModel) {
         let grid = model.visibleGrid
-        self.columns = grid.columns
-        self.rows = grid.rows
-        self.cells = (0..<grid.rows).flatMap { grid.rowCells($0) }
-        self.cursor = model.cursor
-        self.dirtyRows = model.dirtyRows
+        self.init(
+            columns: grid.columns,
+            rows: grid.rows,
+            cells: (0..<grid.rows).flatMap { grid.rowCells($0) },
+            cursor: model.cursor,
+            dirtyRows: model.dirtyRows
+        )
     }
 }

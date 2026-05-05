@@ -145,7 +145,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             height: CGFloat(snapshot.rows) * cellSize.height
         )
         var vertices: [GlyphVertex] = []
-        vertices.reserveCapacity(snapshot.cells.count * 6)
+        vertices.reserveCapacity(snapshot.cells.count * 18)
 
         for row in 0..<snapshot.rows {
             for column in 0..<snapshot.columns {
@@ -155,41 +155,82 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                 }
 
                 let cell = snapshot.cells[cellIndex]
-                guard cell.character != " ",
-                      let glyph = glyphAtlas.glyph(for: cell.character) else {
-                    continue
+                let isCursor = snapshot.cursor == TerminalPoint(column: column, row: row)
+                var foregroundColor = Self.rgba(for: cell.attributes.foreground, defaultColor: Self.defaultForegroundColor)
+                var backgroundColor = Self.rgba(for: cell.attributes.background, defaultColor: Self.defaultBackgroundColor)
+                if cell.attributes.isInverse || isCursor {
+                    swap(&foregroundColor, &backgroundColor)
                 }
 
-                appendQuad(
-                    column: column,
-                    row: row,
-                    viewportSize: viewportSize,
-                    glyph: glyph,
-                    foregroundColor: Self.rgba(for: cell.attributes.foreground),
-                    to: &vertices
-                )
+                if cell.attributes.background != .default || cell.attributes.isInverse || isCursor {
+                    appendSolidQuad(
+                        column: column,
+                        row: row,
+                        viewportSize: viewportSize,
+                        color: backgroundColor,
+                        to: &vertices
+                    )
+                }
+
+                if cell.character != " ", let glyph = glyphAtlas.glyph(for: cell.character) {
+                    appendGlyphQuad(
+                        column: column,
+                        row: row,
+                        viewportSize: viewportSize,
+                        glyph: glyph,
+                        foregroundColor: foregroundColor,
+                        xOffset: 0,
+                        italicSkew: cell.attributes.isItalic ? 1 : 0,
+                        to: &vertices
+                    )
+
+                    if cell.attributes.isBold {
+                        appendGlyphQuad(
+                            column: column,
+                            row: row,
+                            viewportSize: viewportSize,
+                            glyph: glyph,
+                            foregroundColor: foregroundColor,
+                            xOffset: 1,
+                            italicSkew: cell.attributes.isItalic ? 1 : 0,
+                            to: &vertices
+                        )
+                    }
+                }
+
+                if cell.attributes.isUnderline {
+                    appendUnderlineQuad(
+                        column: column,
+                        row: row,
+                        viewportSize: viewportSize,
+                        color: foregroundColor,
+                        to: &vertices
+                    )
+                }
             }
         }
 
         return vertices
     }
 
-    private func appendQuad(
+    private func appendGlyphQuad(
         column: Int,
         row: Int,
         viewportSize: CGSize,
         glyph: GlyphAtlasEntry,
         foregroundColor: SIMD4<Float>,
+        xOffset: CGFloat,
+        italicSkew: CGFloat,
         to vertices: inout [GlyphVertex]
     ) {
         let cellSize = glyphAtlas.cellSize
-        let x0 = CGFloat(column) * cellSize.width
+        let x0 = CGFloat(column) * cellSize.width + xOffset
         let y0 = CGFloat(row) * cellSize.height
         let x1 = x0 + cellSize.width
         let y1 = y0 + cellSize.height
 
         let topLeft = GlyphVertex(
-            position: clipPosition(x: x0, y: y0, viewportSize: viewportSize),
+            position: clipPosition(x: x0 + italicSkew, y: y0, viewportSize: viewportSize),
             textureCoordinate: textureCoordinate(x: glyph.textureRect.minX, y: glyph.textureRect.maxY),
             color: foregroundColor
         )
@@ -199,7 +240,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             color: foregroundColor
         )
         let topRight = GlyphVertex(
-            position: clipPosition(x: x1, y: y0, viewportSize: viewportSize),
+            position: clipPosition(x: x1 + italicSkew, y: y0, viewportSize: viewportSize),
             textureCoordinate: textureCoordinate(x: glyph.textureRect.maxX, y: glyph.textureRect.maxY),
             color: foregroundColor
         )
@@ -207,6 +248,86 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             position: clipPosition(x: x1, y: y1, viewportSize: viewportSize),
             textureCoordinate: textureCoordinate(x: glyph.textureRect.maxX, y: glyph.textureRect.minY),
             color: foregroundColor
+        )
+
+        vertices.append(contentsOf: [
+            topLeft,
+            bottomLeft,
+            topRight,
+            topRight,
+            bottomLeft,
+            bottomRight
+        ])
+    }
+
+    private func appendSolidQuad(
+        column: Int,
+        row: Int,
+        viewportSize: CGSize,
+        color: SIMD4<Float>,
+        to vertices: inout [GlyphVertex]
+    ) {
+        let cellSize = glyphAtlas.cellSize
+        appendSolidQuad(
+            x0: CGFloat(column) * cellSize.width,
+            y0: CGFloat(row) * cellSize.height,
+            x1: CGFloat(column + 1) * cellSize.width,
+            y1: CGFloat(row + 1) * cellSize.height,
+            viewportSize: viewportSize,
+            color: color,
+            to: &vertices
+        )
+    }
+
+    private func appendUnderlineQuad(
+        column: Int,
+        row: Int,
+        viewportSize: CGSize,
+        color: SIMD4<Float>,
+        to vertices: inout [GlyphVertex]
+    ) {
+        let cellSize = glyphAtlas.cellSize
+        let lineHeight = max(CGFloat(1), ceil(cellSize.height * 0.08))
+        let y1 = CGFloat(row + 1) * cellSize.height - 2
+        appendSolidQuad(
+            x0: CGFloat(column) * cellSize.width,
+            y0: max(CGFloat(row) * cellSize.height, y1 - lineHeight),
+            x1: CGFloat(column + 1) * cellSize.width,
+            y1: y1,
+            viewportSize: viewportSize,
+            color: color,
+            to: &vertices
+        )
+    }
+
+    private func appendSolidQuad(
+        x0: CGFloat,
+        y0: CGFloat,
+        x1: CGFloat,
+        y1: CGFloat,
+        viewportSize: CGSize,
+        color: SIMD4<Float>,
+        to vertices: inout [GlyphVertex]
+    ) {
+        let topLeft = GlyphVertex(
+            position: clipPosition(x: x0, y: y0, viewportSize: viewportSize),
+            textureCoordinate: Self.solidTextureCoordinate,
+            color: color
+        )
+        let bottomLeft = GlyphVertex(
+            position: clipPosition(x: x0, y: y1, viewportSize: viewportSize),
+            textureCoordinate: Self.solidTextureCoordinate,
+            color: color
+        )
+        let topRight = GlyphVertex(
+            position: clipPosition(x: x1, y: y0, viewportSize: viewportSize),
+            textureCoordinate: Self.solidTextureCoordinate,
+            color: color
+        )
+        let bottomRight = GlyphVertex(
+            position: clipPosition(x: x1, y: y1, viewportSize: viewportSize),
+            textureCoordinate: Self.solidTextureCoordinate,
+            color: color
         )
 
         vertices.append(contentsOf: [
@@ -280,14 +401,14 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         return try device.makeRenderPipelineState(descriptor: descriptor)
     }
 
-    private static func rgba(for color: TerminalColor) -> SIMD4<Float> {
+    private static func rgba(for color: TerminalColor, defaultColor: SIMD4<Float>) -> SIMD4<Float> {
         switch color {
         case .default:
-            return SIMD4<Float>(0.92, 0.94, 0.96, 1)
+            return defaultColor
         case .ansi(let index):
             let paletteIndex = Int(index)
             guard paletteIndex < ansiPalette.count else {
-                return SIMD4<Float>(0.92, 0.94, 0.96, 1)
+                return defaultColor
             }
 
             return ansiPalette[paletteIndex]
@@ -300,6 +421,10 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             )
         }
     }
+
+    private static let defaultForegroundColor = SIMD4<Float>(0.92, 0.94, 0.96, 1)
+    private static let defaultBackgroundColor = SIMD4<Float>(0.02, 0.02, 0.02, 1)
+    private static let solidTextureCoordinate = SIMD2<Float>(-1, -1)
 
     private static let ansiPalette: [SIMD4<Float>] = [
         SIMD4<Float>(0.00, 0.00, 0.00, 1),
@@ -357,7 +482,9 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             address::clamp_to_edge,
             filter::linear
         );
-        float glyphAlpha = atlas.sample(glyphSampler, input.textureCoordinate).a;
+        float glyphAlpha = input.textureCoordinate.x < 0.0
+            ? 1.0
+            : atlas.sample(glyphSampler, input.textureCoordinate).a;
         return float4(input.color.rgb, input.color.a * glyphAlpha);
     }
     """

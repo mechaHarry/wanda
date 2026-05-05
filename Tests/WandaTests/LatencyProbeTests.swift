@@ -75,4 +75,16 @@ final class LatencyProbeTests: XCTestCase {
         XCTAssertEqual(summary.count, 2)
         XCTAssertEqual(summary.p95Nanoseconds, 25)
     }
+
+    func testCompletedMeasurementsAreBounded() {
+        var probe = LatencyProbe(completedMeasurementLimit: 3)
+
+        for index in 0..<5 {
+            let id = probe.recordKeyReceived(at: UInt64(index * 100))
+            probe.recordFramePresented(for: id, at: UInt64(index * 100 + 10))
+        }
+
+        XCTAssertEqual(probe.completedMeasurements.map(\.id), [2, 3, 4])
+        XCTAssertEqual(probe.summary().count, 3)
+    }
 }

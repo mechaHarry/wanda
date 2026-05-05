@@ -76,7 +76,7 @@ extension RenderingTests {
         XCTAssertEqual(renderer.lastSnapshot?.cells.first?.character, "A")
     }
 
-    func testRendererBuildsVerticesForVisibleCells() throws {
+    func testRendererBuildsVerticesForVisibleTextAndCursor() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
@@ -87,10 +87,10 @@ extension RenderingTests {
 
         renderer.update(snapshot: TerminalRendererSnapshot(model: model))
 
-        XCTAssertEqual(renderer.debugVertexCount, 6)
+        XCTAssertEqual(renderer.debugVertexCount, 12)
     }
 
-    func testRendererSkipsBlankSpacesWhenBuildingVertices() throws {
+    func testRendererBuildsCursorVerticesForBlankScreen() throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")
         }
@@ -100,7 +100,92 @@ extension RenderingTests {
 
         renderer.update(snapshot: TerminalRendererSnapshot(model: model))
 
-        XCTAssertEqual(renderer.debugVertexCount, 0)
+        XCTAssertEqual(renderer.debugVertexCount, 6)
+    }
+
+    func testRendererBuildsVerticesForBackgroundOnlyCells() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let snapshot = TerminalRendererSnapshot(
+            columns: 1,
+            rows: 1,
+            cells: [
+                TerminalCell(
+                    character: " ",
+                    attributes: TerminalAttributes(background: .ansi(index: 1))
+                )
+            ],
+            cursor: TerminalPoint(column: 0, row: 1),
+            dirtyRows: [0]
+        )
+
+        renderer.update(snapshot: snapshot)
+
+        XCTAssertEqual(renderer.debugVertexCount, 6)
+    }
+
+    func testRendererBuildsVerticesForInverseTextBackground() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let snapshot = TerminalRendererSnapshot(
+            columns: 1,
+            rows: 1,
+            cells: [
+                TerminalCell(
+                    character: "A",
+                    attributes: TerminalAttributes(isInverse: true)
+                )
+            ],
+            cursor: TerminalPoint(column: 0, row: 1),
+            dirtyRows: [0]
+        )
+
+        renderer.update(snapshot: snapshot)
+
+        XCTAssertEqual(renderer.debugVertexCount, 12)
+    }
+
+    func testRendererBuildsVerticesForBlankCursorCell() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let model = TerminalModel(columns: 1, rows: 1, scrollbackLimit: 5)
+
+        renderer.update(snapshot: TerminalRendererSnapshot(model: model))
+
+        XCTAssertEqual(renderer.debugVertexCount, 6)
+    }
+
+    func testRendererBuildsVerticesForUnderlinedText() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let snapshot = TerminalRendererSnapshot(
+            columns: 1,
+            rows: 1,
+            cells: [
+                TerminalCell(
+                    character: "A",
+                    attributes: TerminalAttributes(isUnderline: true)
+                )
+            ],
+            cursor: TerminalPoint(column: 0, row: 1),
+            dirtyRows: [0]
+        )
+
+        renderer.update(snapshot: snapshot)
+
+        XCTAssertEqual(renderer.debugVertexCount, 12)
     }
 
     @MainActor

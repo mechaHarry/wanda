@@ -42,12 +42,16 @@ public struct LatencySummary: Equatable, Sendable {
 public struct LatencyProbe: Sendable {
     private var nextID = 0
     private var active: [Int: LatencyMeasurement] = [:]
+    private let completedMeasurementLimit: Int
     public private(set) var completedMeasurements: [LatencyMeasurement] = []
     var activeMeasurementCount: Int {
         active.count
     }
 
-    public init() {}
+    public init(completedMeasurementLimit: Int = 1_024) {
+        precondition(completedMeasurementLimit > 0, "LatencyProbe completed measurement limit must be positive")
+        self.completedMeasurementLimit = completedMeasurementLimit
+    }
 
     public mutating func recordKeyReceived(
         at timestamp: UInt64 = DispatchTime.now().uptimeNanoseconds
@@ -93,6 +97,9 @@ public struct LatencyProbe: Sendable {
         }
         measurement.framePresented = timestamp
         completedMeasurements.append(measurement)
+        if completedMeasurements.count > completedMeasurementLimit {
+            completedMeasurements.removeFirst(completedMeasurements.count - completedMeasurementLimit)
+        }
     }
 
     public func summary() -> LatencySummary {
