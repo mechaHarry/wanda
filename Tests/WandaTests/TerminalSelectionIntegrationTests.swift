@@ -60,4 +60,63 @@ final class TerminalSelectionIntegrationTests: XCTestCase {
         XCTAssertTrue(TerminalSelectionClipboard.copy("selected text", to: pasteboard))
         XCTAssertEqual(pasteboard.string(forType: .string), "selected text")
     }
+
+    func testPlainClickDoesNotCommitSelection() {
+        let view = KeyCaptureView()
+        var beganPoints: [TerminalPoint] = []
+        var changedPoints: [TerminalPoint] = []
+        view.layout = TerminalInputLayout(columns: 4, rows: 2, cellSize: CGSize(width: 10, height: 20))
+        view.onSelectionBegan = { beganPoints.append($0) }
+        view.onSelectionChanged = { changedPoints.append($0) }
+
+        view.handleMouseDown(at: CGPoint(x: 5, y: 5), clickCount: 1)
+        view.handleMouseUp(at: CGPoint(x: 5, y: 5))
+
+        XCTAssertEqual(beganPoints, [])
+        XCTAssertEqual(changedPoints, [])
+    }
+
+    func testDragCommitsSelectionAfterMovingToAnotherCell() {
+        let view = KeyCaptureView()
+        var beganPoints: [TerminalPoint] = []
+        var changedPoints: [TerminalPoint] = []
+        view.layout = TerminalInputLayout(columns: 4, rows: 2, cellSize: CGSize(width: 10, height: 20))
+        view.onSelectionBegan = { beganPoints.append($0) }
+        view.onSelectionChanged = { changedPoints.append($0) }
+
+        view.handleMouseDown(at: CGPoint(x: 5, y: 5), clickCount: 1)
+        view.handleMouseDragged(to: CGPoint(x: 25, y: 5))
+
+        XCTAssertEqual(beganPoints, [TerminalPoint(column: 0, row: 0)])
+        XCTAssertEqual(changedPoints, [TerminalPoint(column: 2, row: 0)])
+    }
+
+    func testInputLayoutFitsActualRenderedCellSize() {
+        let layout = TerminalInputLayout(
+            columns: 3,
+            rows: 2,
+            viewSize: CGSize(width: 100, height: 70)
+        )
+
+        XCTAssertEqual(layout.cellSize, CGSize(width: 100.0 / 3.0, height: 35))
+        XCTAssertEqual(layout.point(for: CGPoint(x: 99, y: 69)), TerminalPoint(column: 2, row: 1))
+    }
+
+    func testRowRangesReturnEmptyWhenSelectionIsOutsideVisibleRows() {
+        let selection = TerminalSelection(
+            start: TerminalPoint(column: 0, row: 5),
+            end: TerminalPoint(column: 2, row: 6)
+        )
+
+        XCTAssertEqual(selection.rowRanges(columns: 4, rows: 2), [])
+    }
+
+    func testRowRangesReturnEmptyWhenSelectionIsOutsideVisibleColumns() {
+        let selection = TerminalSelection(
+            start: TerminalPoint(column: 8, row: 0),
+            end: TerminalPoint(column: 9, row: 0)
+        )
+
+        XCTAssertEqual(selection.rowRanges(columns: 4, rows: 2), [])
+    }
 }

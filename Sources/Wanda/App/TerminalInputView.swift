@@ -39,6 +39,7 @@ final class KeyCaptureView: NSView {
     var onTokenSelection: ((TerminalPoint) -> Void)?
     var onCopy: (() -> Void)?
     private var dragStart: TerminalPoint?
+    private var didCommitDragSelection = false
 
     override var acceptsFirstResponder: Bool {
         true
@@ -55,33 +56,15 @@ final class KeyCaptureView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        let point = terminalPoint(for: event)
-
-        if event.clickCount >= 2 {
-            dragStart = nil
-            onTokenSelection?(point)
-            return
-        }
-
-        dragStart = point
-        onSelectionBegan?(point)
+        handleMouseDown(at: convert(event.locationInWindow, from: nil), clickCount: event.clickCount)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard dragStart != nil else {
-            return
-        }
-
-        onSelectionChanged?(terminalPoint(for: event))
+        handleMouseDragged(to: convert(event.locationInWindow, from: nil))
     }
 
     override func mouseUp(with event: NSEvent) {
-        guard dragStart != nil else {
-            return
-        }
-
-        onSelectionChanged?(terminalPoint(for: event))
-        dragStart = nil
+        handleMouseUp(at: convert(event.locationInWindow, from: nil))
     }
 
     override func keyDown(with event: NSEvent) {
@@ -113,8 +96,52 @@ final class KeyCaptureView: NSView {
         }
     }
 
-    private func terminalPoint(for event: NSEvent) -> TerminalPoint {
-        let location = convert(event.locationInWindow, from: nil)
+    func handleMouseDown(at location: CGPoint, clickCount: Int) {
+        let point = terminalPoint(for: location)
+
+        if clickCount >= 2 {
+            dragStart = nil
+            didCommitDragSelection = false
+            onTokenSelection?(point)
+            return
+        }
+
+        dragStart = point
+        didCommitDragSelection = false
+    }
+
+    func handleMouseDragged(to location: CGPoint) {
+        guard let dragStart else {
+            return
+        }
+
+        let point = terminalPoint(for: location)
+        if !didCommitDragSelection {
+            guard point != dragStart else {
+                return
+            }
+
+            didCommitDragSelection = true
+            onSelectionBegan?(dragStart)
+        }
+
+        onSelectionChanged?(point)
+    }
+
+    func handleMouseUp(at location: CGPoint) {
+        defer {
+            dragStart = nil
+            didCommitDragSelection = false
+        }
+
+        guard didCommitDragSelection else {
+            return
+        }
+
+        onSelectionChanged?(terminalPoint(for: location))
+    }
+
+    private func terminalPoint(for location: CGPoint) -> TerminalPoint {
         return layout.point(for: location)
     }
 }
@@ -123,6 +150,21 @@ struct TerminalInputLayout: Equatable {
     var columns: Int
     var rows: Int
     var cellSize: CGSize
+
+    init(columns: Int, rows: Int, viewSize: CGSize) {
+        self.columns = columns
+        self.rows = rows
+        self.cellSize = CGSize(
+            width: columns > 0 ? viewSize.width / CGFloat(columns) : 1,
+            height: rows > 0 ? viewSize.height / CGFloat(rows) : 1
+        )
+    }
+
+    init(columns: Int, rows: Int, cellSize: CGSize) {
+        self.columns = columns
+        self.rows = rows
+        self.cellSize = cellSize
+    }
 
     func point(for location: CGPoint) -> TerminalPoint {
         TerminalPoint(

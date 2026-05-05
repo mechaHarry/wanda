@@ -25,15 +25,23 @@ public struct TerminalSelection: Equatable, Sendable {
         }
 
         let ordered = orderedEndpoints()
+        guard ordered.end.row >= 0, ordered.start.row < rows else {
+            return []
+        }
+
         let startRow = min(max(ordered.start.row, 0), rows - 1)
         let endRow = min(max(ordered.end.row, 0), rows - 1)
         guard startRow <= endRow else {
             return []
         }
 
-        return (startRow...endRow).map { row in
+        return (startRow...endRow).compactMap { row in
             let startColumn = row == ordered.start.row ? ordered.start.column : 0
             let endColumn = row == ordered.end.row ? ordered.end.column : columns - 1
+            guard endColumn >= 0, startColumn < columns else {
+                return nil
+            }
+
             return TerminalSelectionRowRange(
                 row: row,
                 startColumn: min(max(startColumn, 0), columns - 1),

@@ -21,7 +21,7 @@ struct TerminalWindowView: View {
                 TerminalSelectionOverlay(
                     selection: viewModel.selection,
                     snapshot: viewModel.snapshot,
-                    cellSize: Self.terminalCellSize
+                    viewSize: geometry.size
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -89,7 +89,7 @@ struct TerminalWindowView: View {
         TerminalInputLayout(
             columns: max(1, Int(size.width / Self.terminalCellSize.width)),
             rows: max(1, Int(size.height / Self.terminalCellSize.height)),
-            cellSize: Self.terminalCellSize
+            viewSize: size
         )
     }
 }
@@ -97,11 +97,13 @@ struct TerminalWindowView: View {
 private struct TerminalSelectionOverlay: View {
     var selection: TerminalSelection?
     var snapshot: TerminalRendererSnapshot?
-    var cellSize: CGSize
+    var viewSize: CGSize
 
     var body: some View {
         ZStack(alignment: .topLeading) {
             if let selection, let snapshot {
+                let cellSize = effectiveCellSize(for: snapshot)
+
                 ForEach(Array(selection.rowRanges(columns: snapshot.columns, rows: snapshot.rows).enumerated()), id: \.offset) { _, range in
                     Rectangle()
                         .fill(Color.accentColor.opacity(0.32))
@@ -117,6 +119,17 @@ private struct TerminalSelectionOverlay: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    private func effectiveCellSize(for snapshot: TerminalRendererSnapshot) -> CGSize {
+        guard snapshot.columns > 0, snapshot.rows > 0 else {
+            return CGSize(width: 1, height: 1)
+        }
+
+        return CGSize(
+            width: viewSize.width / CGFloat(snapshot.columns),
+            height: viewSize.height / CGFloat(snapshot.rows)
+        )
     }
 }
 
