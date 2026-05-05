@@ -8,6 +8,7 @@ public protocol PseudoTerminal: AnyObject, Sendable {
 
     func write(_ bytes: [UInt8]) throws
     func resize(_ size: TerminalSize) throws
+    func readAvailableBytes(maxBytes: Int) throws -> [UInt8]
     func terminate()
 }
 

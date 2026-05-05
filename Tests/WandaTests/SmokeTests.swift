@@ -1,3 +1,4 @@
+import Foundation
 import XCTest
 @testable import Wanda
 
@@ -63,9 +64,66 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(viewModel.debugCompletedLatencyCount, 0)
     }
 
+    func testResizeIgnoresInvalidSizesAndPropagatesValidSize() {
+        let pty = FakePseudoTerminal()
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.resize(columns: 0, rows: 24)
+        viewModel.resize(columns: 80, rows: 0)
+        viewModel.resize(columns: -1, rows: 24)
+        viewModel.resize(columns: 100, rows: 40)
+
+        XCTAssertEqual(pty.resizes, [TerminalSize(columns: 100, rows: 40)])
+        XCTAssertEqual(pty.currentSize, TerminalSize(columns: 100, rows: 40))
+        XCTAssertNil(viewModel.statusMessage)
+    }
+
+    func testResizeFailureSetsStatusMessage() {
+        let pty = FakePseudoTerminal(resizeError: .resizeFailed(EBADF))
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.resize(columns: 100, rows: 40)
+
+        XCTAssertEqual(pty.resizes, [])
+        XCTAssertTrue(viewModel.statusMessage?.contains("Failed to resize terminal") == true)
+    }
+
+    func testStartDefaultShellStartsOutputPumpForInjectedPTYAndAppliesReadBytes() async {
+        let pty = FakePseudoTerminal(readResults: [.bytes(Array("z".utf8))])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let rendered = await waitForCondition {
+            viewModel.snapshot?.cells[0].character == "z"
+        }
+
+        XCTAssertTrue(rendered)
+        XCTAssertGreaterThan(pty.readCallCount, 0)
+        viewModel.stop()
+    }
+
+    func testOutputPumpReadFailureSetsStatusMessage() async {
+        let pty = FakePseudoTerminal(readResults: [.failure(.readFailed(EBADF))])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let surfacedError = await waitForCondition {
+            viewModel.statusMessage?.contains("Failed to read from terminal") == true
+        }
+
+        XCTAssertTrue(surfacedError)
+        XCTAssertFalse(viewModel.debugHasOutputTask)
+        viewModel.stop()
+    }
+
     func testStopTerminatesPTYAndClearsPendingLatency() async {
         let pty = FakePseudoTerminal()
         let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+        XCTAssertTrue(viewModel.debugHasOutputTask)
 
         viewModel.handleKey(.printable("a"))
         XCTAssertEqual(viewModel.debugPendingLatencyCount, 1)
@@ -75,6 +133,7 @@ final class SmokeTests: XCTestCase {
         await drainMainActorTasks()
 
         XCTAssertEqual(pty.terminateCallCount, 1)
+        XCTAssertFalse(viewModel.debugHasOutputTask)
         XCTAssertEqual(viewModel.debugActiveLatencyCount, 0)
         XCTAssertEqual(viewModel.debugPendingLatencyCount, 0)
         XCTAssertEqual(viewModel.debugCompletedLatencyCount, 0)
@@ -98,21 +157,75 @@ final class SmokeTests: XCTestCase {
             await Task.yield()
         }
     }
+
+    private func waitForCondition(
+        timeoutNanoseconds: UInt64 = 500_000_000,
+        _ condition: () -> Bool
+    ) async -> Bool {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            if condition() {
+                return true
+            }
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        return condition()
+    }
+}
+
+private enum FakeReadResult {
+    case bytes([UInt8])
+    case failure(PseudoTerminalError)
 }
 
 private final class FakePseudoTerminal: PseudoTerminal, @unchecked Sendable {
-    var currentSize: TerminalSize
-    var state: PseudoTerminalState = .running
-    private(set) var writes: [[UInt8]] = []
-    private(set) var terminateCallCount = 0
+    private let lock = NSLock()
+    private var storedSize: TerminalSize
+    private var storedState: PseudoTerminalState = .running
+    private var storedWrites: [[UInt8]] = []
+    private var storedResizes: [TerminalSize] = []
+    private var storedTerminateCallCount = 0
+    private var storedReadCallCount = 0
+    private var readResults: [FakeReadResult]
     private let writeError: PseudoTerminalError?
+    private let resizeError: PseudoTerminalError?
+
+    var currentSize: TerminalSize {
+        lock.withLock { storedSize }
+    }
+
+    var state: PseudoTerminalState {
+        lock.withLock { storedState }
+    }
+
+    var writes: [[UInt8]] {
+        lock.withLock { storedWrites }
+    }
+
+    var resizes: [TerminalSize] {
+        lock.withLock { storedResizes }
+    }
+
+    var terminateCallCount: Int {
+        lock.withLock { storedTerminateCallCount }
+    }
+
+    var readCallCount: Int {
+        lock.withLock { storedReadCallCount }
+    }
 
     init(
         size: TerminalSize = TerminalSize(columns: 80, rows: 24),
-        writeError: PseudoTerminalError? = nil
+        writeError: PseudoTerminalError? = nil,
+        resizeError: PseudoTerminalError? = nil,
+        readResults: [FakeReadResult] = []
     ) {
-        self.currentSize = size
+        self.storedSize = size
         self.writeError = writeError
+        self.resizeError = resizeError
+        self.readResults = readResults
     }
 
     func write(_ bytes: [UInt8]) throws {
@@ -120,15 +233,49 @@ private final class FakePseudoTerminal: PseudoTerminal, @unchecked Sendable {
             throw writeError
         }
 
-        writes.append(bytes)
+        lock.withLock {
+            storedWrites.append(bytes)
+        }
     }
 
     func resize(_ size: TerminalSize) throws {
-        currentSize = size
+        if let resizeError {
+            throw resizeError
+        }
+
+        lock.withLock {
+            storedSize = size
+            storedResizes.append(size)
+        }
+    }
+
+    func readAvailableBytes(maxBytes: Int = 4096) throws -> [UInt8] {
+        guard maxBytes > 0 else {
+            return []
+        }
+
+        let result = lock.withLock {
+            storedReadCallCount += 1
+            guard !readResults.isEmpty else {
+                return nil as FakeReadResult?
+            }
+            return readResults.removeFirst()
+        }
+
+        switch result {
+        case .bytes(let bytes):
+            return Array(bytes.prefix(maxBytes))
+        case .failure(let error):
+            throw error
+        case nil:
+            return []
+        }
     }
 
     func terminate() {
-        terminateCallCount += 1
-        state = .terminating
+        lock.withLock {
+            storedTerminateCallCount += 1
+            storedState = .terminating
+        }
     }
 }

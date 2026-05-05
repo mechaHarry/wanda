@@ -14,6 +14,9 @@ public final class TerminalViewModel: ObservableObject {
     private let keyMapper: TerminalKeyMapper
     private var pendingLatencyIDs: [Int] = []
     private var pty: (any PseudoTerminal)?
+    private var outputTask: Task<Void, Never>?
+    private var outputTaskID: Int?
+    private var nextOutputTaskID = 0
 
     var debugActiveLatencyCount: Int {
         latencyProbe.activeMeasurementCount
@@ -31,6 +34,10 @@ public final class TerminalViewModel: ObservableObject {
         latencyProbe.completedMeasurements
     }
 
+    var debugHasOutputTask: Bool {
+        outputTask != nil
+    }
+
     public convenience init(columns: Int = 80, rows: Int = 24, scrollbackLimit: Int = 2_000) {
         self.init(columns: columns, rows: rows, scrollbackLimit: scrollbackLimit, pty: nil)
     }
@@ -45,7 +52,8 @@ public final class TerminalViewModel: ObservableObject {
     }
 
     public func startDefaultShell() {
-        guard pty == nil else {
+        if let pty {
+            startOutputPumpIfNeeded(for: pty)
             return
         }
 
@@ -56,12 +64,14 @@ public final class TerminalViewModel: ObservableObject {
         )
 
         do {
-            pty = try PosixPseudoTerminal(
+            let terminal = try PosixPseudoTerminal(
                 executablePath: shell,
                 arguments: [shell],
                 environment: ["TERM": "xterm-256color"],
                 size: size
             )
+            pty = terminal
+            startOutputPumpIfNeeded(for: terminal)
             statusMessage = nil
         } catch {
             statusMessage = "Failed to start shell: \(error)"
@@ -101,6 +111,18 @@ public final class TerminalViewModel: ObservableObject {
         }
     }
 
+    public func resize(columns: Int, rows: Int) {
+        guard columns > 0, rows > 0 else {
+            return
+        }
+
+        do {
+            try pty?.resize(TerminalSize(columns: columns, rows: rows))
+        } catch {
+            statusMessage = "Failed to resize terminal: \(error)"
+        }
+    }
+
     public nonisolated func framePresented(at timestamp: UInt64) {
         Task { @MainActor [weak self] in
             self?.recordFramePresented(at: timestamp)
@@ -108,6 +130,9 @@ public final class TerminalViewModel: ObservableObject {
     }
 
     public func stop() {
+        outputTask?.cancel()
+        outputTask = nil
+        outputTaskID = nil
         pty?.terminate()
         pty = nil
         cancelPendingLatencyIDs()
@@ -120,6 +145,67 @@ public final class TerminalViewModel: ObservableObject {
 
         let pendingLatencyID = pendingLatencyIDs.removeFirst()
         latencyProbe.recordFramePresented(for: pendingLatencyID, at: timestamp)
+    }
+
+    private func startOutputPumpIfNeeded(for terminal: any PseudoTerminal) {
+        guard outputTask == nil else {
+            return
+        }
+
+        nextOutputTaskID += 1
+        let taskID = nextOutputTaskID
+        outputTaskID = taskID
+        outputTask = Task.detached(priority: .userInitiated) { [weak self, terminal] in
+            while !Task.isCancelled {
+                guard self != nil else {
+                    break
+                }
+
+                do {
+                    let bytes = try terminal.readAvailableBytes(maxBytes: 4096)
+
+                    if Task.isCancelled {
+                        break
+                    }
+
+                    if !bytes.isEmpty {
+                        await MainActor.run { [weak self] in
+                            guard !Task.isCancelled else {
+                                return
+                            }
+                            self?.processOutput(bytes)
+                        }
+                    }
+
+                    try await Task.sleep(nanoseconds: 5_000_000)
+                } catch is CancellationError {
+                    break
+                } catch {
+                    guard !Task.isCancelled else {
+                        break
+                    }
+
+                    let message = "Failed to read from terminal: \(error)"
+                    await MainActor.run { [weak self] in
+                        self?.statusMessage = message
+                    }
+                    break
+                }
+            }
+
+            await MainActor.run { [weak self] in
+                self?.finishOutputPump(id: taskID)
+            }
+        }
+    }
+
+    private func finishOutputPump(id: Int) {
+        guard outputTaskID == id else {
+            return
+        }
+
+        outputTask = nil
+        outputTaskID = nil
     }
 
     private func enqueuePendingLatencyID(_ id: Int) {
