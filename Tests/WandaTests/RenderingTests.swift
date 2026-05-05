@@ -1,3 +1,4 @@
+import Metal
 import XCTest
 @testable import Wanda
 
@@ -38,5 +39,21 @@ final class RenderingTests: XCTestCase {
         let atlas = try GlyphAtlas(fontName: "Menlo", fontSize: 14)
 
         XCTAssertNil(atlas.glyph(for: "é"))
+    }
+}
+
+extension RenderingTests {
+    func testMetalRendererAcceptsSnapshot() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        var model = TerminalModel(columns: 2, rows: 1, scrollbackLimit: 5)
+        model.apply(.print("A"))
+
+        renderer.update(snapshot: TerminalRendererSnapshot(model: model))
+
+        XCTAssertEqual(renderer.lastSnapshot?.cells.first?.character, "A")
     }
 }
