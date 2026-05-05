@@ -168,6 +168,8 @@ final class PseudoTerminalTests: XCTestCase {
         try await waitForFile(atPath: markerPath)
         _ = try pty.readAvailableBytes()
 
+        try await waitForExitedState(pty)
+
         switch pty.state {
         case .exited:
             break
@@ -195,6 +197,8 @@ final class PseudoTerminalTests: XCTestCase {
         try await waitForFile(atPath: markerPath)
         _ = try pty.readAvailableBytes()
 
+        try await waitForExitedState(pty)
+
         switch pty.state {
         case .exited:
             break
@@ -203,6 +207,69 @@ final class PseudoTerminalTests: XCTestCase {
         }
 
         XCTAssertNoThrow(try pty.readAvailableBytes())
+    }
+
+    func testReadEOFReturnsPromptlyWhenChildClosesPTYBeforeExit() async throws {
+        let markerPath = "/tmp/wanda-pty-eof-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: markerPath) }
+
+        let pty = try PosixPseudoTerminal(
+            executablePath: "/usr/bin/perl",
+            arguments: [
+                "perl",
+                "-e",
+                "print \"done\"; close STDIN; close STDOUT; close STDERR; open(my $fh, '>', $ARGV[0]) or exit 2; close $fh; select(undef, undef, undef, 0.4); exit 7;",
+                markerPath,
+            ],
+            environment: ["TERM": "xterm-256color", "PS1": ""],
+            size: TerminalSize(columns: 80, rows: 24)
+        )
+        defer { pty.terminate() }
+
+        _ = try await pty.readUntilString("done", timeoutNanoseconds: 2_000_000_000)
+        try await waitForFile(atPath: markerPath)
+
+        try await waitForEOFReadWithoutBlocking(pty)
+
+        try await waitForExitedState(pty, timeoutNanoseconds: 1_000_000_000)
+    }
+
+    func testTerminateReturnsPromptlyAfterEOFBeforeDelayedExit() async throws {
+        let markerPath = "/tmp/wanda-pty-eof-\(UUID().uuidString)"
+        defer { try? FileManager.default.removeItem(atPath: markerPath) }
+
+        let pty = try PosixPseudoTerminal(
+            executablePath: "/usr/bin/perl",
+            arguments: [
+                "perl",
+                "-e",
+                "print \"done\"; close STDIN; close STDOUT; close STDERR; open(my $fh, '>', $ARGV[0]) or exit 2; close $fh; select(undef, undef, undef, 1.0); exit 7;",
+                markerPath,
+            ],
+            environment: ["TERM": "xterm-256color", "PS1": ""],
+            size: TerminalSize(columns: 80, rows: 24)
+        )
+        defer { pty.terminate() }
+
+        _ = try await pty.readUntilString("done", timeoutNanoseconds: 2_000_000_000)
+        try await waitForFile(atPath: markerPath)
+        try await waitForEOFReadWithoutBlocking(pty)
+
+        let terminateReturned = expectation(description: "terminate returns while delayed child is still alive")
+        let terminateTask = Task {
+            pty.terminate()
+            terminateReturned.fulfill()
+        }
+
+        await fulfillment(of: [terminateReturned], timeout: 0.3)
+        _ = await terminateTask.result
+
+        switch pty.state {
+        case .terminating, .exited:
+            break
+        case .running, .failed:
+            XCTFail("Expected terminate to leave a non-running state, got \(pty.state)")
+        }
     }
 
     private func waitForFile(atPath path: String) async throws {
@@ -215,5 +282,55 @@ final class PseudoTerminalTests: XCTestCase {
         }
 
         XCTFail("Timed out waiting for \(path)")
+    }
+
+    private func waitForEOFReadWithoutBlocking(_ pty: PosixPseudoTerminal) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + 300_000_000
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            let readReturned = expectation(description: "EOF read returns without waiting for child exit")
+            let readTask = Task {
+                XCTAssertNoThrow(try pty.readAvailableBytes())
+                readReturned.fulfill()
+            }
+
+            await fulfillment(of: [readReturned], timeout: 0.05)
+            _ = await readTask.result
+
+            switch pty.state {
+            case .terminating, .exited:
+                return
+            case .failed(let message):
+                XCTFail("Expected EOF read to mark terminating or exited, got failed: \(message)")
+                return
+            case .running:
+                try await Task.sleep(nanoseconds: 1_000_000)
+            }
+        }
+
+        XCTFail("Timed out waiting for EOF read to mark a non-running state, got \(pty.state)")
+    }
+
+    private func waitForExitedState(
+        _ pty: PosixPseudoTerminal,
+        timeoutNanoseconds: UInt64 = 2_000_000_000
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while DispatchTime.now().uptimeNanoseconds < deadline {
+            _ = try pty.readAvailableBytes()
+
+            switch pty.state {
+            case .exited:
+                return
+            case .failed(let message):
+                XCTFail("Expected exited state, got failed: \(message)")
+                return
+            case .running, .terminating:
+                break
+            }
+
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+
+        XCTFail("Timed out waiting for exited state, got \(pty.state)")
     }
 }
