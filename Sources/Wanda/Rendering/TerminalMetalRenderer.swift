@@ -1,10 +1,12 @@
 import Foundation
 import Metal
 import MetalKit
+import simd
 
 public enum RendererError: Error, Equatable {
     case commandQueueUnavailable
     case metalDeviceUnavailable
+    case shaderFunctionUnavailable(String)
 }
 
 public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
@@ -18,6 +20,18 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         set {
             stateLock.withLock {
                 storedLastSnapshot = newValue
+            }
+        }
+    }
+    public private(set) var debugVertexCount: Int {
+        get {
+            stateLock.withLock {
+                storedDebugVertexCount
+            }
+        }
+        set {
+            stateLock.withLock {
+                storedDebugVertexCount = newValue
             }
         }
     }
@@ -35,8 +49,13 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
     }
 
     private let commandQueue: MTLCommandQueue
+    private let glyphAtlas: GlyphAtlas
+    private let atlasTexture: MTLTexture
+    private let pipelineState: MTLRenderPipelineState
     private let stateLock = NSLock()
     private var storedLastSnapshot: TerminalRendererSnapshot?
+    private var storedDebugVertexCount = 0
+    private var storedVertexBuffer: MTLBuffer?
     private var storedFramePresented: (@Sendable (UInt64) -> Void)?
 
     public init(device: MTLDevice, framePresented: (@Sendable (UInt64) -> Void)? = nil) throws {
@@ -44,14 +63,28 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             throw RendererError.commandQueueUnavailable
         }
 
+        let glyphAtlas = try GlyphAtlas(fontName: "Menlo", fontSize: 14)
+        let atlasTexture = try Self.makeAtlasTexture(device: device, image: glyphAtlas.image)
+        let pipelineState = try Self.makePipelineState(device: device)
+
         self.device = device
         self.commandQueue = commandQueue
+        self.glyphAtlas = glyphAtlas
+        self.atlasTexture = atlasTexture
+        self.pipelineState = pipelineState
         self.storedFramePresented = framePresented
         super.init()
     }
 
     public func update(snapshot: TerminalRendererSnapshot) {
-        lastSnapshot = snapshot
+        let vertices = buildVertices(for: snapshot)
+        let vertexBuffer = makeVertexBuffer(vertices: vertices)
+
+        stateLock.withLock {
+            storedLastSnapshot = snapshot
+            storedDebugVertexCount = vertices.count
+            storedVertexBuffer = vertexBuffer
+        }
     }
 
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
@@ -62,6 +95,17 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
             return
+        }
+
+        let drawState = stateLock.withLock {
+            (vertexCount: storedDebugVertexCount, vertexBuffer: storedVertexBuffer)
+        }
+
+        if drawState.vertexCount > 0, let vertexBuffer = drawState.vertexBuffer {
+            encoder.setRenderPipelineState(pipelineState)
+            encoder.setVertexBuffer(vertexBuffer, offset: 0, index: 0)
+            encoder.setFragmentTexture(atlasTexture, index: 0)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: drawState.vertexCount)
         }
 
         encoder.endEncoding()
@@ -89,4 +133,238 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             framePresented(timestamp)
         }
     }
+
+    private func buildVertices(for snapshot: TerminalRendererSnapshot) -> [GlyphVertex] {
+        guard snapshot.columns > 0, snapshot.rows > 0 else {
+            return []
+        }
+
+        let cellSize = glyphAtlas.cellSize
+        let viewportSize = CGSize(
+            width: CGFloat(snapshot.columns) * cellSize.width,
+            height: CGFloat(snapshot.rows) * cellSize.height
+        )
+        var vertices: [GlyphVertex] = []
+        vertices.reserveCapacity(snapshot.cells.count * 6)
+
+        for row in 0..<snapshot.rows {
+            for column in 0..<snapshot.columns {
+                let cellIndex = row * snapshot.columns + column
+                guard cellIndex < snapshot.cells.count else {
+                    continue
+                }
+
+                let cell = snapshot.cells[cellIndex]
+                guard cell.character != " ",
+                      let glyph = glyphAtlas.glyph(for: cell.character) else {
+                    continue
+                }
+
+                appendQuad(
+                    column: column,
+                    row: row,
+                    viewportSize: viewportSize,
+                    glyph: glyph,
+                    foregroundColor: Self.rgba(for: cell.attributes.foreground),
+                    to: &vertices
+                )
+            }
+        }
+
+        return vertices
+    }
+
+    private func appendQuad(
+        column: Int,
+        row: Int,
+        viewportSize: CGSize,
+        glyph: GlyphAtlasEntry,
+        foregroundColor: SIMD4<Float>,
+        to vertices: inout [GlyphVertex]
+    ) {
+        let cellSize = glyphAtlas.cellSize
+        let x0 = CGFloat(column) * cellSize.width
+        let y0 = CGFloat(row) * cellSize.height
+        let x1 = x0 + cellSize.width
+        let y1 = y0 + cellSize.height
+
+        let topLeft = GlyphVertex(
+            position: clipPosition(x: x0, y: y0, viewportSize: viewportSize),
+            textureCoordinate: textureCoordinate(x: glyph.textureRect.minX, y: glyph.textureRect.maxY),
+            color: foregroundColor
+        )
+        let bottomLeft = GlyphVertex(
+            position: clipPosition(x: x0, y: y1, viewportSize: viewportSize),
+            textureCoordinate: textureCoordinate(x: glyph.textureRect.minX, y: glyph.textureRect.minY),
+            color: foregroundColor
+        )
+        let topRight = GlyphVertex(
+            position: clipPosition(x: x1, y: y0, viewportSize: viewportSize),
+            textureCoordinate: textureCoordinate(x: glyph.textureRect.maxX, y: glyph.textureRect.maxY),
+            color: foregroundColor
+        )
+        let bottomRight = GlyphVertex(
+            position: clipPosition(x: x1, y: y1, viewportSize: viewportSize),
+            textureCoordinate: textureCoordinate(x: glyph.textureRect.maxX, y: glyph.textureRect.minY),
+            color: foregroundColor
+        )
+
+        vertices.append(contentsOf: [
+            topLeft,
+            bottomLeft,
+            topRight,
+            topRight,
+            bottomLeft,
+            bottomRight
+        ])
+    }
+
+    private func clipPosition(x: CGFloat, y: CGFloat, viewportSize: CGSize) -> SIMD2<Float> {
+        SIMD2<Float>(
+            Float((x / viewportSize.width) * 2 - 1),
+            Float(1 - (y / viewportSize.height) * 2)
+        )
+    }
+
+    private func textureCoordinate(x: CGFloat, y: CGFloat) -> SIMD2<Float> {
+        SIMD2<Float>(
+            Float(x / glyphAtlas.atlasSize.width),
+            Float(1 - (y / glyphAtlas.atlasSize.height))
+        )
+    }
+
+    private func makeVertexBuffer(vertices: [GlyphVertex]) -> MTLBuffer? {
+        guard !vertices.isEmpty else {
+            return nil
+        }
+
+        return vertices.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return nil
+            }
+
+            return device.makeBuffer(
+                bytes: baseAddress,
+                length: rawBuffer.count,
+                options: .storageModeShared
+            )
+        }
+    }
+
+    private static func makeAtlasTexture(device: MTLDevice, image: CGImage) throws -> MTLTexture {
+        let textureLoader = MTKTextureLoader(device: device)
+        return try textureLoader.newTexture(cgImage: image, options: [.SRGB: false])
+    }
+
+    private static func makePipelineState(device: MTLDevice) throws -> MTLRenderPipelineState {
+        let library = try device.makeLibrary(source: shaderSource, options: nil)
+        guard let vertexFunction = library.makeFunction(name: "terminalGlyphVertex") else {
+            throw RendererError.shaderFunctionUnavailable("terminalGlyphVertex")
+        }
+        guard let fragmentFunction = library.makeFunction(name: "terminalGlyphFragment") else {
+            throw RendererError.shaderFunctionUnavailable("terminalGlyphFragment")
+        }
+
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = vertexFunction
+        descriptor.fragmentFunction = fragmentFunction
+        descriptor.colorAttachments[0].pixelFormat = .bgra8Unorm
+        descriptor.colorAttachments[0].isBlendingEnabled = true
+        descriptor.colorAttachments[0].rgbBlendOperation = .add
+        descriptor.colorAttachments[0].alphaBlendOperation = .add
+        descriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+
+        return try device.makeRenderPipelineState(descriptor: descriptor)
+    }
+
+    private static func rgba(for color: TerminalColor) -> SIMD4<Float> {
+        switch color {
+        case .default:
+            return SIMD4<Float>(0.92, 0.94, 0.96, 1)
+        case .ansi(let index):
+            let paletteIndex = Int(index)
+            guard paletteIndex < ansiPalette.count else {
+                return SIMD4<Float>(0.92, 0.94, 0.96, 1)
+            }
+
+            return ansiPalette[paletteIndex]
+        case .rgb(let red, let green, let blue):
+            return SIMD4<Float>(
+                Float(red) / 255,
+                Float(green) / 255,
+                Float(blue) / 255,
+                1
+            )
+        }
+    }
+
+    private static let ansiPalette: [SIMD4<Float>] = [
+        SIMD4<Float>(0.00, 0.00, 0.00, 1),
+        SIMD4<Float>(0.80, 0.00, 0.00, 1),
+        SIMD4<Float>(0.00, 0.80, 0.00, 1),
+        SIMD4<Float>(0.80, 0.80, 0.00, 1),
+        SIMD4<Float>(0.00, 0.00, 0.80, 1),
+        SIMD4<Float>(0.80, 0.00, 0.80, 1),
+        SIMD4<Float>(0.00, 0.80, 0.80, 1),
+        SIMD4<Float>(0.86, 0.86, 0.86, 1),
+        SIMD4<Float>(0.33, 0.33, 0.33, 1),
+        SIMD4<Float>(1.00, 0.33, 0.33, 1),
+        SIMD4<Float>(0.33, 1.00, 0.33, 1),
+        SIMD4<Float>(1.00, 1.00, 0.33, 1),
+        SIMD4<Float>(0.33, 0.33, 1.00, 1),
+        SIMD4<Float>(1.00, 0.33, 1.00, 1),
+        SIMD4<Float>(0.33, 1.00, 1.00, 1),
+        SIMD4<Float>(1.00, 1.00, 1.00, 1)
+    ]
+
+    private static let shaderSource = """
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct TerminalGlyphVertex {
+        float2 position;
+        float2 textureCoordinate;
+        float4 color;
+    };
+
+    struct TerminalGlyphVaryings {
+        float4 position [[position]];
+        float2 textureCoordinate;
+        float4 color;
+    };
+
+    vertex TerminalGlyphVaryings terminalGlyphVertex(
+        uint vertexID [[vertex_id]],
+        const device TerminalGlyphVertex *vertices [[buffer(0)]]
+    ) {
+        TerminalGlyphVertex input = vertices[vertexID];
+        TerminalGlyphVaryings output;
+        output.position = float4(input.position, 0.0, 1.0);
+        output.textureCoordinate = input.textureCoordinate;
+        output.color = input.color;
+        return output;
+    }
+
+    fragment float4 terminalGlyphFragment(
+        TerminalGlyphVaryings input [[stage_in]],
+        texture2d<float, access::sample> atlas [[texture(0)]]
+    ) {
+        constexpr sampler glyphSampler(
+            coord::normalized,
+            address::clamp_to_edge,
+            filter::linear
+        );
+        float glyphAlpha = atlas.sample(glyphSampler, input.textureCoordinate).a;
+        return float4(input.color.rgb, input.color.a * glyphAlpha);
+    }
+    """
+}
+
+private struct GlyphVertex {
+    let position: SIMD2<Float>
+    let textureCoordinate: SIMD2<Float>
+    let color: SIMD4<Float>
 }

@@ -29,6 +29,23 @@ final class RenderingTests: XCTestCase {
         XCTAssertGreaterThan(entry.advance, 0)
     }
 
+    func testGlyphAtlasBuildsTextureCoordinates() throws {
+        let atlas = try GlyphAtlas(fontName: "Menlo", fontSize: 14)
+
+        XCTAssertGreaterThan(atlas.atlasSize.width, atlas.cellSize.width)
+        XCTAssertGreaterThan(atlas.atlasSize.height, atlas.cellSize.height)
+        XCTAssertGreaterThan(atlas.image.width, 0)
+        XCTAssertGreaterThan(atlas.image.height, 0)
+
+        let entry = try XCTUnwrap(atlas.glyph(for: "A"))
+        XCTAssertGreaterThan(entry.textureRect.width, 0)
+        XCTAssertGreaterThan(entry.textureRect.height, 0)
+        XCTAssertGreaterThanOrEqual(entry.textureRect.minX, 0)
+        XCTAssertGreaterThanOrEqual(entry.textureRect.minY, 0)
+        XCTAssertLessThanOrEqual(entry.textureRect.maxX, atlas.atlasSize.width)
+        XCTAssertLessThanOrEqual(entry.textureRect.maxY, atlas.atlasSize.height)
+    }
+
     func testGlyphAtlasReportsMissingFont() {
         let fontName = "WandaMissingFontDefinitelyUnavailable"
 
@@ -57,6 +74,33 @@ extension RenderingTests {
         renderer.update(snapshot: TerminalRendererSnapshot(model: model))
 
         XCTAssertEqual(renderer.lastSnapshot?.cells.first?.character, "A")
+    }
+
+    func testRendererBuildsVerticesForVisibleCells() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        var model = TerminalModel(columns: 2, rows: 1, scrollbackLimit: 5)
+        model.apply(.print("A"))
+
+        renderer.update(snapshot: TerminalRendererSnapshot(model: model))
+
+        XCTAssertEqual(renderer.debugVertexCount, 6)
+    }
+
+    func testRendererSkipsBlankSpacesWhenBuildingVertices() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let model = TerminalModel(columns: 2, rows: 1, scrollbackLimit: 5)
+
+        renderer.update(snapshot: TerminalRendererSnapshot(model: model))
+
+        XCTAssertEqual(renderer.debugVertexCount, 0)
     }
 
     @MainActor
