@@ -18,6 +18,7 @@ Implement from `docs/superpowers/specs/2026-05-04-terminal-core-mvp-design.md`.
 
 - `Package.swift`: SwiftPM executable and test target definition.
 - `Sources/Wanda/App/WandaApp.swift`: SwiftUI app entry point.
+- `Sources/Wanda/App/WandaApplicationDelegate.swift`: Foreground activation adapter for direct SwiftPM app launches.
 - `Sources/Wanda/App/TerminalWindowView.swift`: Native SwiftUI window content and status surfaces.
 - `Sources/Wanda/App/TerminalViewModel.swift`: Main actor coordinator between UI, PTY, terminal model, and renderer snapshots.
 - `Sources/Wanda/App/GeometryStore.swift`: Window size and position persistence.
@@ -41,6 +42,7 @@ Implement from `docs/superpowers/specs/2026-05-04-terminal-core-mvp-design.md`.
 - `Tests/WandaTests/TerminalSelectionTests.swift`: Selection and double-click token tests.
 - `Tests/WandaTests/TerminalKeyMapperTests.swift`: Option/Cmd arrow and printable key tests.
 - `Tests/WandaTests/GeometryStoreTests.swift`: Geometry persistence tests.
+- `Tests/WandaTests/WandaApplicationDelegateTests.swift`: Foreground activation tests.
 - `Tests/WandaTests/PseudoTerminalTests.swift`: PTY launch, echo, resize, and cleanup tests.
 - `Tests/WandaTests/RenderingTests.swift`: Snapshot, glyph atlas, and renderer metadata tests.
 - `Tests/WandaTests/LatencyProbeTests.swift`: Latency summary tests.
@@ -3060,7 +3062,7 @@ git commit -m "feat: restore terminal window geometry"
 - Modify: `README.md`
 - Modify: `docs/superpowers/plans/2026-05-04-terminal-core-mvp.md`
 
-- [ ] **Step 1: Update README with MVP verification commands**
+- [x] **Step 1: Update README with MVP verification commands**
 
 Modify `README.md`:
 
@@ -3105,25 +3107,27 @@ The first milestone is a single native macOS terminal window with a local shell,
 - Sustained shell output does not grow scrollback beyond the configured cap.
 ```
 
-- [ ] **Step 2: Run full automated verification**
+- [x] **Step 2: Run full automated verification**
 
 Run: `swift test`
 
 Expected: PASS for all test targets.
 
-- [ ] **Step 3: Run build verification**
+- [x] **Step 3: Run build verification**
 
 Run: `swift build`
 
 Expected: PASS.
 
-- [ ] **Step 4: Run a local app smoke test**
+- [x] **Step 4: Run a local app smoke test**
 
 Run: `swift run Wanda`
 
 Expected: A native macOS window opens, starts the user's default shell, and accepts basic keyboard input. Close the app after the smoke test.
 
-- [ ] **Step 5: Commit documentation**
+Implementation note: The first smoke attempt started the raw SwiftPM executable without a foreground app window. Added `WandaApplicationDelegate` to request regular AppKit activation on launch, covered by `WandaApplicationDelegateTests`, then re-ran `swift run Wanda`. System Events reported Wanda as a foreground app with one window, accepted `echo wanda-smoke`, remained alive, and quit cleanly with Command-Q.
+
+- [x] **Step 5: Commit documentation**
 
 ```bash
 git add README.md docs/superpowers/plans/2026-05-04-terminal-core-mvp.md
