@@ -40,6 +40,7 @@ Implement from `docs/superpowers/specs/2026-05-04-terminal-core-mvp-design.md`.
 - `Sources/Wanda/Instrumentation/LatencyProbe.swift`: Keystroke-to-present measurements and summaries.
 - `Tests/WandaTests/TerminalCoreTests.swift`: Grid, model, parser, scrollback, alternate screen tests.
 - `Tests/WandaTests/TerminalSelectionTests.swift`: Selection and double-click token tests.
+- `Tests/WandaTests/TerminalSelectionIntegrationTests.swift`: App-level drag selection, token selection, coordinate mapping, and clipboard copy tests.
 - `Tests/WandaTests/TerminalKeyMapperTests.swift`: Option/Cmd arrow and printable key tests.
 - `Tests/WandaTests/GeometryStoreTests.swift`: Geometry persistence tests.
 - `Tests/WandaTests/WandaApplicationDelegateTests.swift`: Foreground activation tests.
@@ -3127,6 +3128,8 @@ Expected: A native macOS window opens, starts the user's default shell, and acce
 
 Implementation note: The first smoke attempt started the raw SwiftPM executable without a foreground app window. Added `WandaApplicationDelegate` to request regular AppKit activation on launch, covered by `WandaApplicationDelegateTests`, then re-ran `swift run Wanda`. System Events reported Wanda as a foreground app with one window, accepted `echo wanda-smoke`, remained alive, and quit cleanly with Command-Q.
 
+Review follow-up: Added user-facing basic selection integration after review found the previous implementation only covered the model rules. `TerminalInputView` now maps mouse drag and double-click events into terminal cells, `TerminalViewModel` owns the active selection, `TerminalWindowView` draws the selected cell ranges above Metal, and Command-C copies selected text through the native pasteboard.
+
 - [x] **Step 5: Commit documentation**
 
 ```bash
@@ -3136,7 +3139,7 @@ git commit -m "docs: add terminal mvp verification notes"
 
 ## Self-Review Checklist
 
-- Spec coverage: this plan covers the SwiftUI shell, PTY adapter, replaceable parser boundary, terminal model, bounded scrollback, selection, key mapping, geometry persistence, atlas-backed Metal glyph rendering, latency probe, tests, and final verification.
+- Spec coverage: this plan covers the SwiftUI shell, PTY adapter, replaceable parser boundary, terminal model, bounded scrollback, drag/double-click selection with copy, key mapping, geometry persistence, atlas-backed Metal glyph rendering, latency probe, tests, and final verification.
 - Scope control: this plan does not add splits, multiple windows, disk-backed history, indexed search, live session restore, ligatures, complex shaping, network calls, or AI features.
 - Type consistency: shared types are named consistently across tasks: `TerminalPoint`, `TerminalCell`, `TerminalGrid`, `TerminalModel`, `TerminalEvent`, `SwiftTerminalParser`, `TerminalSelection`, `TerminalKeyMapper`, `TerminalSize`, `PosixPseudoTerminal`, `TerminalRendererSnapshot`, `GlyphAtlas`, `TerminalMetalRenderer`, and `LatencyProbe`.
 - Test discipline: every feature task starts with a failing test or a build-verified bridge step, then requires `swift test` or `swift build` before commit.

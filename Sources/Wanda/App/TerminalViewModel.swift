@@ -5,6 +5,7 @@ import SwiftUI
 public final class TerminalViewModel: ObservableObject {
     @Published public private(set) var snapshot: TerminalRendererSnapshot?
     @Published public private(set) var statusMessage: String?
+    @Published public private(set) var selection: TerminalSelection?
 
     private static let maxPendingLatencyIDs = 128
     private static let maxOutputBatchBytes = 64 * 1024
@@ -101,6 +102,33 @@ public final class TerminalViewModel: ObservableObject {
         }
 
         snapshot = TerminalRendererSnapshot(model: model)
+    }
+
+    public func beginSelection(at point: TerminalPoint) {
+        let point = clampedPoint(point)
+        selection = TerminalSelection(start: point, end: point)
+    }
+
+    public func updateSelection(to point: TerminalPoint) {
+        let point = clampedPoint(point)
+        guard let selection else {
+            beginSelection(at: point)
+            return
+        }
+
+        self.selection = TerminalSelection(start: selection.start, end: point)
+    }
+
+    public func selectToken(at point: TerminalPoint) {
+        selection = TerminalSelection.token(at: clampedPoint(point), in: model.visibleGrid)
+    }
+
+    public func clearSelection() {
+        selection = nil
+    }
+
+    public func selectedText() -> String? {
+        selection?.string(in: model.visibleGrid)
     }
 
     public func handleKey(_ event: TerminalKeyEvent) {
@@ -317,6 +345,14 @@ public final class TerminalViewModel: ObservableObject {
         }
 
         return shell
+    }
+
+    private func clampedPoint(_ point: TerminalPoint) -> TerminalPoint {
+        let grid = model.visibleGrid
+        return TerminalPoint(
+            column: min(max(point.column, 0), grid.columns - 1),
+            row: min(max(point.row, 0), grid.rows - 1)
+        )
     }
 }
 

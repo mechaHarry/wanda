@@ -10,19 +10,36 @@ public struct TerminalSelection: Equatable, Sendable {
     }
 
     public func string(in grid: TerminalGrid) -> String {
-        let ordered = orderedEndpoints()
-        var rows: [String] = []
-
-        for row in ordered.start.row...ordered.end.row {
-            let startColumn = row == ordered.start.row ? ordered.start.column : 0
-            let endColumn = row == ordered.end.row ? ordered.end.column : grid.columns - 1
-            let characters = (startColumn...endColumn).map {
-                grid.cell(at: TerminalPoint(column: $0, row: row)).character
+        rowRanges(columns: grid.columns, rows: grid.rows).map { range in
+            let characters = (range.startColumn...range.endColumn).map {
+                grid.cell(at: TerminalPoint(column: $0, row: range.row)).character
             }
-            rows.append(String(characters).trimmedTrailingSpaces())
+            return String(characters).trimmedTrailingSpaces()
+        }
+        .joined(separator: "\n")
+    }
+
+    public func rowRanges(columns: Int, rows: Int) -> [TerminalSelectionRowRange] {
+        guard columns > 0, rows > 0 else {
+            return []
         }
 
-        return rows.joined(separator: "\n")
+        let ordered = orderedEndpoints()
+        let startRow = min(max(ordered.start.row, 0), rows - 1)
+        let endRow = min(max(ordered.end.row, 0), rows - 1)
+        guard startRow <= endRow else {
+            return []
+        }
+
+        return (startRow...endRow).map { row in
+            let startColumn = row == ordered.start.row ? ordered.start.column : 0
+            let endColumn = row == ordered.end.row ? ordered.end.column : columns - 1
+            return TerminalSelectionRowRange(
+                row: row,
+                startColumn: min(max(startColumn, 0), columns - 1),
+                endColumn: min(max(endColumn, 0), columns - 1)
+            )
+        }
     }
 
     public static func token(at point: TerminalPoint, in grid: TerminalGrid) -> TerminalSelection {
@@ -59,6 +76,18 @@ public struct TerminalSelection: Equatable, Sendable {
         }
         let delimiters = CharacterSet(charactersIn: "\"'`()[]{}<>")
         return String(character).unicodeScalars.allSatisfy { !delimiters.contains($0) }
+    }
+}
+
+public struct TerminalSelectionRowRange: Equatable, Sendable {
+    public var row: Int
+    public var startColumn: Int
+    public var endColumn: Int
+
+    public init(row: Int, startColumn: Int, endColumn: Int) {
+        self.row = row
+        self.startColumn = startColumn
+        self.endColumn = endColumn
     }
 }
 

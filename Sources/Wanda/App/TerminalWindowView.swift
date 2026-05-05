@@ -2,11 +2,15 @@ import AppKit
 import SwiftUI
 
 struct TerminalWindowView: View {
+    private static let terminalCellSize = CGSize(width: 9, height: 18)
+
     @StateObject private var viewModel = TerminalViewModel()
     @StateObject private var windowGeometry = TerminalWindowGeometryController()
 
     var body: some View {
         GeometryReader { geometry in
+            let layout = terminalInputLayout(for: geometry.size)
+
             ZStack(alignment: .topLeading) {
                 TerminalMetalViewRepresentable(
                     snapshot: viewModel.snapshot,
@@ -14,9 +18,31 @@ struct TerminalWindowView: View {
                 )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                TerminalInputView { keyEvent in
-                    viewModel.handleKey(keyEvent)
-                }
+                TerminalSelectionOverlay(
+                    selection: viewModel.selection,
+                    snapshot: viewModel.snapshot,
+                    cellSize: Self.terminalCellSize
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                TerminalInputView(
+                    layout: layout,
+                    onKey: { keyEvent in
+                        viewModel.handleKey(keyEvent)
+                    },
+                    onSelectionBegan: { point in
+                        viewModel.beginSelection(at: point)
+                    },
+                    onSelectionChanged: { point in
+                        viewModel.updateSelection(to: point)
+                    },
+                    onTokenSelection: { point in
+                        viewModel.selectToken(at: point)
+                    },
+                    onCopy: {
+                        _ = TerminalSelectionClipboard.copy(viewModel.selectedText())
+                    }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .contentShape(Rectangle())
 
@@ -54,9 +80,43 @@ struct TerminalWindowView: View {
     }
 
     private func resizeTerminal(to size: CGSize) {
-        let columns = max(1, Int(size.width / 9))
-        let rows = max(1, Int(size.height / 18))
+        let columns = max(1, Int(size.width / Self.terminalCellSize.width))
+        let rows = max(1, Int(size.height / Self.terminalCellSize.height))
         viewModel.resize(columns: columns, rows: rows)
+    }
+
+    private func terminalInputLayout(for size: CGSize) -> TerminalInputLayout {
+        TerminalInputLayout(
+            columns: max(1, Int(size.width / Self.terminalCellSize.width)),
+            rows: max(1, Int(size.height / Self.terminalCellSize.height)),
+            cellSize: Self.terminalCellSize
+        )
+    }
+}
+
+private struct TerminalSelectionOverlay: View {
+    var selection: TerminalSelection?
+    var snapshot: TerminalRendererSnapshot?
+    var cellSize: CGSize
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if let selection, let snapshot {
+                ForEach(Array(selection.rowRanges(columns: snapshot.columns, rows: snapshot.rows).enumerated()), id: \.offset) { _, range in
+                    Rectangle()
+                        .fill(Color.accentColor.opacity(0.32))
+                        .frame(
+                            width: CGFloat(range.endColumn - range.startColumn + 1) * cellSize.width,
+                            height: cellSize.height
+                        )
+                        .offset(
+                            x: CGFloat(range.startColumn) * cellSize.width,
+                            y: CGFloat(range.row) * cellSize.height
+                        )
+                }
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
 
