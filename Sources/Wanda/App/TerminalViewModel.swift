@@ -8,6 +8,9 @@ public final class TerminalViewModel: ObservableObject {
 
     private static let maxPendingLatencyIDs = 128
     private static let maxOutputBatchBytes = 64 * 1024
+    private static let outputPumpReadMaxBytes = 4_096
+    private static let terminatingReapAttemptCount = 20
+    private static let terminatingReapSleepNanoseconds: UInt64 = 5_000_000
 
     private var parser: any TerminalParser
     private var model: TerminalModel
@@ -165,9 +168,12 @@ public final class TerminalViewModel: ObservableObject {
         nextOutputTaskID += 1
         let taskID = nextOutputTaskID
         let maxOutputBatchBytes = Self.maxOutputBatchBytes
+        let outputPumpReadMaxBytes = Self.outputPumpReadMaxBytes
+        let terminatingReapAttemptCount = Self.terminatingReapAttemptCount
+        let terminatingReapSleepNanoseconds = Self.terminatingReapSleepNanoseconds
         outputTaskID = taskID
         outputTask = Task.detached(priority: .userInitiated) { [weak self, terminal] in
-            while !Task.isCancelled {
+            pumpLoop: while !Task.isCancelled {
                 guard self != nil else {
                     break
                 }
@@ -179,7 +185,7 @@ public final class TerminalViewModel: ObservableObject {
 
                 while !Task.isCancelled {
                     do {
-                        let bytes = try terminal.readAvailableBytes(maxBytes: 4096)
+                        let bytes = try terminal.readAvailableBytes(maxBytes: outputPumpReadMaxBytes)
 
                         if bytes.isEmpty {
                             shouldSleepAfterBatch = true
@@ -215,30 +221,60 @@ public final class TerminalViewModel: ObservableObject {
                 }
 
                 if shouldStop || Task.isCancelled {
-                    break
+                    break pumpLoop
                 }
 
                 if let pendingError {
                     guard !Task.isCancelled else {
-                        break
+                        break pumpLoop
                     }
 
                     let message = "Failed to read from terminal: \(pendingError)"
                     await MainActor.run { [weak self] in
                         self?.statusMessage = message
                     }
-                    break
+                    break pumpLoop
                 }
 
-                if terminal.state != .running {
+                switch terminal.state {
+                case .running:
                     break
+                case .terminating:
+                    let terminatingResult = await driveTerminatingOutputPump(
+                        terminal: terminal,
+                        maxBytes: outputPumpReadMaxBytes,
+                        attemptCount: terminatingReapAttemptCount,
+                        sleepNanoseconds: terminatingReapSleepNanoseconds
+                    )
+
+                    switch terminatingResult {
+                    case .running:
+                        continue pumpLoop
+                    case .finished, .cancelled:
+                        break pumpLoop
+                    case .timedOut:
+                        terminal.terminate()
+                        break pumpLoop
+                    case .failed(let error):
+                        guard !Task.isCancelled else {
+                            break pumpLoop
+                        }
+
+                        let message = "Failed to read from terminal: \(error)"
+                        await MainActor.run { [weak self] in
+                            self?.statusMessage = message
+                        }
+                        break pumpLoop
+                    }
+                case .exited, .failed:
+                    break pumpLoop
                 }
 
                 if shouldSleepAfterBatch {
                     do {
                         try await Task.sleep(nanoseconds: 5_000_000)
                     } catch {
-                        break
+                        break pumpLoop
                     }
                 }
             }
@@ -281,5 +317,66 @@ public final class TerminalViewModel: ObservableObject {
         }
 
         return shell
+    }
+}
+
+private enum OutputPumpTerminatingResult {
+    case running
+    case finished
+    case timedOut
+    case cancelled
+    case failed(any Error)
+}
+
+private func driveTerminatingOutputPump(
+    terminal: any PseudoTerminal,
+    maxBytes: Int,
+    attemptCount: Int,
+    sleepNanoseconds: UInt64
+) async -> OutputPumpTerminatingResult {
+    guard attemptCount > 0 else {
+        return terminal.state == .terminating ? .timedOut : .finished
+    }
+
+    for attemptIndex in 0..<attemptCount {
+        if Task.isCancelled {
+            return .cancelled
+        }
+
+        do {
+            _ = try terminal.readAvailableBytes(maxBytes: maxBytes)
+        } catch is CancellationError {
+            return .cancelled
+        } catch {
+            return .failed(error)
+        }
+
+        if Task.isCancelled {
+            return .cancelled
+        }
+
+        switch terminal.state {
+        case .running:
+            return .running
+        case .exited, .failed:
+            return .finished
+        case .terminating:
+            if attemptIndex < attemptCount - 1 {
+                do {
+                    try await Task.sleep(nanoseconds: sleepNanoseconds)
+                } catch {
+                    return .cancelled
+                }
+            }
+        }
+    }
+
+    switch terminal.state {
+    case .running:
+        return .running
+    case .exited, .failed:
+        return .finished
+    case .terminating:
+        return .timedOut
     }
 }

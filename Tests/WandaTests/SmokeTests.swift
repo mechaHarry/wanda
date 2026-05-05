@@ -184,6 +184,43 @@ final class SmokeTests: XCTestCase {
         viewModel.stop()
     }
 
+    func testOutputPumpDrivesFollowUpReadsForTerminatingPTYUntilExited() async {
+        let pty = FakePseudoTerminal(readResults: [
+            .bytes(Array("z".utf8)),
+            .emptyAndSetState(.terminating),
+            .emptyAndSetState(.terminating),
+            .emptyAndSetState(.exited(0)),
+        ])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let reaped = await waitForCondition {
+            pty.state == .exited(0) && !viewModel.debugHasOutputTask
+        }
+
+        XCTAssertTrue(reaped)
+        XCTAssertEqual(viewModel.snapshot?.cells[0].character, "z")
+        XCTAssertGreaterThanOrEqual(pty.readCallCount, 4)
+        XCTAssertEqual(pty.terminateCallCount, 0)
+    }
+
+    func testOutputPumpTerminatesPTYWhenTerminatingStateDoesNotExit() async {
+        let pty = FakePseudoTerminal(readResults: [
+            .emptyAndSetState(.terminating),
+        ])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let terminated = await waitForCondition(timeoutNanoseconds: 1_000_000_000) {
+            pty.terminateCallCount == 1 && !viewModel.debugHasOutputTask
+        }
+
+        XCTAssertTrue(terminated)
+        XCTAssertGreaterThan(pty.readCallCount, 1)
+    }
+
     func testStopTerminatesPTYAndClearsPendingLatency() async {
         let pty = FakePseudoTerminal()
         let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
@@ -244,6 +281,7 @@ final class SmokeTests: XCTestCase {
 private enum FakeReadResult {
     case bytes([UInt8])
     case empty
+    case emptyAndSetState(PseudoTerminalState)
     case failure(PseudoTerminalError)
 }
 
@@ -333,6 +371,11 @@ private final class FakePseudoTerminal: PseudoTerminal, @unchecked Sendable {
         case .bytes(let bytes):
             return Array(bytes.prefix(maxBytes))
         case .empty:
+            return []
+        case .emptyAndSetState(let state):
+            lock.withLock {
+                storedState = state
+            }
             return []
         case .failure(let error):
             throw error
