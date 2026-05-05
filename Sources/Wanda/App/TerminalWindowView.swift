@@ -1,15 +1,30 @@
 import SwiftUI
 
 struct TerminalWindowView: View {
+    @StateObject private var viewModel = TerminalViewModel()
+
     var body: some View {
-        VStack(spacing: 10) {
-            Text("Wanda")
-                .font(.system(.title2, design: .monospaced))
-            Text("Terminal core is not connected yet.")
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(.secondary)
+        ZStack(alignment: .topLeading) {
+            TerminalMetalViewRepresentable(
+                snapshot: viewModel.snapshot,
+                onFramePresented: viewModel.framePresented(at:)
+            )
+
+            if let statusMessage = viewModel.statusMessage {
+                Text(statusMessage)
+                    .font(.system(.footnote, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6))
+                    .padding(12)
+            }
         }
         .frame(minWidth: 720, minHeight: 420)
-        .padding(24)
+        .task {
+            viewModel.startDefaultShell()
+        }
+        .onDisappear {
+            viewModel.stop()
+        }
     }
 }
