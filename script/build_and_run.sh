@@ -4,9 +4,10 @@ set -euo pipefail
 MODE="${1:-run}"
 APP_NAME="Wanda"
 BUNDLE_ID="com.mechaharry.Wanda"
-MIN_SYSTEM_VERSION="15.0"
+MIN_SYSTEM_VERSION="26.0"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VERSION_FILE="$ROOT_DIR/VERSION"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
@@ -25,7 +26,13 @@ stop_existing_app() {
 stage_bundle() {
   swift build
   local build_binary
+  local app_version
   build_binary="$(swift build --show-bin-path)/$APP_NAME"
+  app_version="$(tr -d '[:space:]' < "$VERSION_FILE")"
+  if [[ ! "$app_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "VERSION must contain a semver in MAJOR.MINOR.PATCH form" >&2
+    return 1
+  fi
 
   rm -rf "$APP_BUNDLE"
   mkdir -p "$APP_MACOS"
@@ -43,6 +50,10 @@ stage_bundle() {
   <string>$BUNDLE_ID</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$app_version</string>
+  <key>CFBundleVersion</key>
+  <string>1</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSMinimumSystemVersion</key>
