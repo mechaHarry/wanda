@@ -108,6 +108,7 @@ final class TerminalWindowGeometryController: ObservableObject {
 
     func observe(window: NSWindow) {
         self.window = window
+        WandaWindowSpacePolicy.configure(window)
 
         guard let frame = frameToApply(
             to: ObjectIdentifier(window),

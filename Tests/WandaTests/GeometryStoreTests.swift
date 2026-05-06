@@ -151,6 +151,7 @@ final class GeometryStoreTests: XCTestCase {
 
         controller.observe(window: window)
         XCTAssertEqual(window.frame, savedFrame)
+        XCTAssertTrue(window.collectionBehavior.contains(.moveToActiveSpace))
 
         window.setFrame(movedFrame, display: false)
         controller.saveCurrentWindowFrame()
