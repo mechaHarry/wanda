@@ -12,8 +12,13 @@ public struct TerminalTheme: @unchecked Sendable {
     }
 
     public static let `default` = TerminalTheme(
-        foreground: NSColor(calibratedRed: 0.92, green: 0.94, blue: 0.96, alpha: 1),
-        background: NSColor(calibratedRed: 0.02, green: 0.02, blue: 0.025, alpha: 1)
+        foreground: NSColor(
+            calibratedRed: CGFloat(TerminalAccessibleColors.defaultForeground.x),
+            green: CGFloat(TerminalAccessibleColors.defaultForeground.y),
+            blue: CGFloat(TerminalAccessibleColors.defaultForeground.z),
+            alpha: CGFloat(TerminalAccessibleColors.defaultForeground.w)
+        ),
+        background: NSColor(calibratedRed: 0, green: 0, blue: 0, alpha: 1)
     )
 
     @MainActor

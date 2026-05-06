@@ -59,6 +59,18 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             }
         }
     }
+    private(set) var debugPrimitiveColors: [SIMD4<Float>] {
+        get {
+            stateLock.withLock {
+                storedDebugPrimitiveColors
+            }
+        }
+        set {
+            stateLock.withLock {
+                storedDebugPrimitiveColors = newValue
+            }
+        }
+    }
     public var framePresented: (@Sendable (UInt64) -> Void)? {
         get {
             stateLock.withLock {
@@ -80,10 +92,11 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
     private var storedLastSnapshot: TerminalRendererSnapshot?
     private var storedDebugVertexCount = 0
     private var storedDebugPrimitiveKinds: [TerminalMetalPrimitiveKind] = []
+    private var storedDebugPrimitiveColors: [SIMD4<Float>] = []
     private var storedVertexBuffer: MTLBuffer?
     private var storedFramePresented: (@Sendable (UInt64) -> Void)?
-    private var storedDefaultForegroundColor = SIMD4<Float>(0.92, 0.94, 0.96, 1)
-    private var storedDefaultBackgroundColor = SIMD4<Float>(0.02, 0.02, 0.025, 1)
+    private var storedDefaultForegroundColor = TerminalAccessibleColors.defaultForeground
+    private var storedDefaultBackgroundColor = TerminalAccessibleColors.pureBlack
 
     public init(device: MTLDevice, framePresented: (@Sendable (UInt64) -> Void)? = nil) throws {
         guard let commandQueue = device.makeCommandQueue() else {
@@ -118,6 +131,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             storedLastSnapshot = snapshot
             storedDebugVertexCount = buildResult.vertices.count
             storedDebugPrimitiveKinds = buildResult.primitiveKinds
+            storedDebugPrimitiveColors = buildResult.primitiveColors
             storedVertexBuffer = vertexBuffer
         }
     }
@@ -171,7 +185,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
 
     private func buildVertices(for snapshot: TerminalRendererSnapshot) -> VertexBuildResult {
         guard snapshot.columns > 0, snapshot.rows > 0 else {
-            return VertexBuildResult(vertices: [], primitiveKinds: [])
+            return VertexBuildResult(vertices: [], primitiveKinds: [], primitiveColors: [])
         }
 
         let cellSize = glyphAtlas.cellSize
@@ -184,6 +198,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         }
         var vertices: [GlyphVertex] = []
         var primitiveKinds: [TerminalMetalPrimitiveKind] = []
+        var primitiveColors: [SIMD4<Float>] = []
         vertices.reserveCapacity(snapshot.cells.count * 18)
 
         for row in 0..<snapshot.rows {
@@ -195,8 +210,14 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
 
                 let cell = snapshot.cells[cellIndex]
                 let isCursor = snapshot.cursor == TerminalPoint(column: column, row: row)
-                var foregroundColor = Self.rgba(for: cell.attributes.foreground, defaultColor: defaultColors.foreground)
-                var backgroundColor = Self.rgba(for: cell.attributes.background, defaultColor: defaultColors.background)
+                var foregroundColor = TerminalAccessibleColors.foregroundColor(
+                    for: cell.attributes.foreground,
+                    defaultColor: defaultColors.foreground
+                )
+                var backgroundColor = TerminalAccessibleColors.backgroundColor(
+                    for: cell.attributes.background,
+                    defaultColor: defaultColors.background
+                )
                 if cell.attributes.isInverse || isCursor {
                     swap(&foregroundColor, &backgroundColor)
                 }
@@ -210,6 +231,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                         to: &vertices
                     )
                     primitiveKinds.append(isCursor ? .cursor : .background)
+                    primitiveColors.append(backgroundColor)
                 }
 
                 if cell.attributes.isUnderline {
@@ -221,6 +243,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                         to: &vertices
                     )
                     primitiveKinds.append(.underline)
+                    primitiveColors.append(foregroundColor)
                 }
 
                 if cell.character != " ", let glyph = glyphAtlas.glyph(for: cell.character) {
@@ -235,6 +258,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                         to: &vertices
                     )
                     primitiveKinds.append(.glyph)
+                    primitiveColors.append(foregroundColor)
 
                     if cell.attributes.isBold {
                         appendGlyphQuad(
@@ -248,12 +272,17 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                             to: &vertices
                         )
                         primitiveKinds.append(.glyph)
+                        primitiveColors.append(foregroundColor)
                     }
                 }
             }
         }
 
-        return VertexBuildResult(vertices: vertices, primitiveKinds: primitiveKinds)
+        return VertexBuildResult(
+            vertices: vertices,
+            primitiveKinds: primitiveKinds,
+            primitiveColors: primitiveColors
+        )
     }
 
     private func appendGlyphQuad(
@@ -444,47 +473,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         return try device.makeRenderPipelineState(descriptor: descriptor)
     }
 
-    private static func rgba(for color: TerminalColor, defaultColor: SIMD4<Float>) -> SIMD4<Float> {
-        switch color {
-        case .default:
-            return defaultColor
-        case .ansi(let index):
-            let paletteIndex = Int(index)
-            guard paletteIndex < ansiPalette.count else {
-                return defaultColor
-            }
-
-            return ansiPalette[paletteIndex]
-        case .rgb(let red, let green, let blue):
-            return SIMD4<Float>(
-                Float(red) / 255,
-                Float(green) / 255,
-                Float(blue) / 255,
-                1
-            )
-        }
-    }
-
     private static let solidTextureCoordinate = SIMD2<Float>(-1, -1)
-
-    private static let ansiPalette: [SIMD4<Float>] = [
-        SIMD4<Float>(0.00, 0.00, 0.00, 1),
-        SIMD4<Float>(0.80, 0.00, 0.00, 1),
-        SIMD4<Float>(0.00, 0.80, 0.00, 1),
-        SIMD4<Float>(0.80, 0.80, 0.00, 1),
-        SIMD4<Float>(0.00, 0.00, 0.80, 1),
-        SIMD4<Float>(0.80, 0.00, 0.80, 1),
-        SIMD4<Float>(0.00, 0.80, 0.80, 1),
-        SIMD4<Float>(0.86, 0.86, 0.86, 1),
-        SIMD4<Float>(0.33, 0.33, 0.33, 1),
-        SIMD4<Float>(1.00, 0.33, 0.33, 1),
-        SIMD4<Float>(0.33, 1.00, 0.33, 1),
-        SIMD4<Float>(1.00, 1.00, 0.33, 1),
-        SIMD4<Float>(0.33, 0.33, 1.00, 1),
-        SIMD4<Float>(1.00, 0.33, 1.00, 1),
-        SIMD4<Float>(0.33, 1.00, 1.00, 1),
-        SIMD4<Float>(1.00, 1.00, 1.00, 1)
-    ]
 
     private static let shaderSource = """
     #include <metal_stdlib>
@@ -547,4 +536,5 @@ enum TerminalMetalPrimitiveKind: Equatable {
 private struct VertexBuildResult {
     var vertices: [GlyphVertex]
     var primitiveKinds: [TerminalMetalPrimitiveKind]
+    var primitiveColors: [SIMD4<Float>]
 }

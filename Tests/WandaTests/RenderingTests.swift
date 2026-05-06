@@ -59,6 +59,52 @@ final class RenderingTests: XCTestCase {
 
         XCTAssertNil(atlas.glyph(for: "é"))
     }
+
+    func testDefaultThemeUsesPureBlackAccessibleColorScheme() {
+        let background = TerminalTheme.default.background.usingColorSpace(.deviceRGB)
+        let foreground = TerminalTheme.default.foreground.usingColorSpace(.deviceRGB)
+        let foregroundSIMD = SIMD4<Float>(
+            Float(foreground?.redComponent ?? 0),
+            Float(foreground?.greenComponent ?? 0),
+            Float(foreground?.blueComponent ?? 0),
+            Float(foreground?.alphaComponent ?? 0)
+        )
+
+        XCTAssertEqual(background?.redComponent, 0)
+        XCTAssertEqual(background?.greenComponent, 0)
+        XCTAssertEqual(background?.blueComponent, 0)
+        XCTAssertGreaterThanOrEqual(
+            TerminalAccessibleColors.contrastRatio(foreground: foregroundSIMD, background: TerminalAccessibleColors.pureBlack),
+            TerminalAccessibleColors.minimumTextContrastRatio
+        )
+    }
+
+    func testEveryANSITextColorMeetsWCAGContrastOnPureBlack() {
+        for index in 0..<TerminalAccessibleColors.ansiColorCount {
+            let color = TerminalAccessibleColors.foregroundColor(
+                for: .ansi(index: UInt8(index)),
+                defaultColor: TerminalAccessibleColors.defaultForeground
+            )
+
+            XCTAssertGreaterThanOrEqual(
+                TerminalAccessibleColors.contrastRatio(foreground: color, background: TerminalAccessibleColors.pureBlack),
+                TerminalAccessibleColors.minimumTextContrastRatio,
+                "ANSI text color \(index) does not meet minimum contrast"
+            )
+        }
+    }
+
+    func testArbitraryDarkRGBTextIsLiftedToMinimumContrast() {
+        let color = TerminalAccessibleColors.foregroundColor(
+            for: .rgb(red: 0, green: 0, blue: 0),
+            defaultColor: TerminalAccessibleColors.defaultForeground
+        )
+
+        XCTAssertGreaterThanOrEqual(
+            TerminalAccessibleColors.contrastRatio(foreground: color, background: TerminalAccessibleColors.pureBlack),
+            TerminalAccessibleColors.minimumTextContrastRatio
+        )
+    }
 }
 
 extension RenderingTests {
@@ -125,6 +171,55 @@ extension RenderingTests {
         renderer.update(snapshot: snapshot)
 
         XCTAssertEqual(renderer.debugVertexCount, 6)
+    }
+
+    func testRendererUsesAccessibleForegroundPaletteAndSemanticBackgroundPalette() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let textSnapshot = TerminalRendererSnapshot(
+            columns: 1,
+            rows: 1,
+            cells: [
+                TerminalCell(
+                    character: "A",
+                    attributes: TerminalAttributes(foreground: .ansi(index: 0))
+                )
+            ],
+            cursor: TerminalPoint(column: 0, row: 1),
+            dirtyRows: [0]
+        )
+
+        renderer.update(snapshot: textSnapshot)
+
+        XCTAssertEqual(renderer.debugPrimitiveKinds, [.glyph])
+        XCTAssertGreaterThanOrEqual(
+            TerminalAccessibleColors.contrastRatio(
+                foreground: try XCTUnwrap(renderer.debugPrimitiveColors.first),
+                background: TerminalAccessibleColors.pureBlack
+            ),
+            TerminalAccessibleColors.minimumTextContrastRatio
+        )
+
+        let backgroundSnapshot = TerminalRendererSnapshot(
+            columns: 1,
+            rows: 1,
+            cells: [
+                TerminalCell(
+                    character: " ",
+                    attributes: TerminalAttributes(background: .ansi(index: 0))
+                )
+            ],
+            cursor: TerminalPoint(column: 0, row: 1),
+            dirtyRows: [0]
+        )
+
+        renderer.update(snapshot: backgroundSnapshot)
+
+        XCTAssertEqual(renderer.debugPrimitiveKinds, [.background])
+        XCTAssertEqual(renderer.debugPrimitiveColors.first, TerminalAccessibleColors.pureBlack)
     }
 
     func testRendererBuildsVerticesForInverseTextBackground() throws {
