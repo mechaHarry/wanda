@@ -193,7 +193,20 @@ extension TerminalCoreTests {
 
         let events = parser.parse(Array("\u{001B}[2J\u{001B}[K\u{001B}[m\u{001B}[31;1m".utf8))
 
-        XCTAssertEqual(events, [.clearScreen, .clearLine, .setGraphicRendition([0]), .setGraphicRendition([31, 1])])
+        XCTAssertEqual(events, [.eraseScreen(.all), .clearLine, .setGraphicRendition([0]), .setGraphicRendition([31, 1])])
+    }
+
+    func testParserEmitsEraseScreenModes() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[J\u{001B}[0J\u{001B}[1J\u{001B}[2J".utf8))
+
+        XCTAssertEqual(events, [
+            .eraseScreen(.cursorToEnd),
+            .eraseScreen(.cursorToEnd),
+            .eraseScreen(.startToCursor),
+            .eraseScreen(.all),
+        ])
     }
 
     func testParserEmitsAlternateScreenEvents() {
@@ -286,21 +299,126 @@ extension TerminalCoreTests {
         model.apply(.print("B"))
         XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).attributes, TerminalAttributes())
 
-        model.apply(.clearScreen)
+        model.apply(.eraseScreen(.all))
         XCTAssertEqual(model.visibleGrid.rowCells(0), [.blank, .blank, .blank])
         XCTAssertEqual(model.visibleGrid.rowCells(1), [.blank, .blank, .blank])
     }
 
-    func testModelClearScreenResetsCursorAndPendingWrap() {
+    func testModelEraseFromCursorToEndPreservesEarlierOutput() {
+        var model = TerminalModel(columns: 4, rows: 3, scrollbackLimit: 5)
+        for character in "abcdefgh" {
+            model.apply(.print(character))
+        }
+
+        model.apply(.moveCursor(row: 1, column: 1))
+        model.apply(.eraseScreen(.cursorToEnd))
+
+        XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "abcd")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(1).map(\.character)), "e   ")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(2).map(\.character)), "    ")
+    }
+
+    func testModelEraseStartToCursorPreservesLaterOutput() {
+        var model = TerminalModel(columns: 4, rows: 3, scrollbackLimit: 5)
+        for character in "abcdefghijkl" {
+            model.apply(.print(character))
+        }
+
+        model.apply(.moveCursor(row: 1, column: 2))
+        model.apply(.eraseScreen(.startToCursor))
+
+        XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "    ")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(1).map(\.character)), "   h")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(2).map(\.character)), "ijkl")
+    }
+
+    func testModelEraseAllClearsVisibleScreenWithoutMovingCursorOrScrollback() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
+        for character in "abcdef" {
+            model.apply(.print(character))
+        }
+        let scrollbackCount = model.scrollback.count
+
+        model.apply(.moveCursor(row: 1, column: 1))
+        model.apply(.eraseScreen(.all))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 1))
+        XCTAssertEqual(model.visibleGrid.rowCells(0), [.blank, .blank])
+        XCTAssertEqual(model.visibleGrid.rowCells(1), [.blank, .blank])
+        XCTAssertEqual(model.scrollback.count, scrollbackCount)
+    }
+
+    func testModelShellLikePromptRedrawDoesNotClearPreviousCommandOutput() {
+        var model = TerminalModel(columns: 12, rows: 4, scrollbackLimit: 5)
+        for character in "echo hi" {
+            model.apply(.print(character))
+        }
+        model.apply(.carriageReturn)
+        model.apply(.lineFeed)
+        for character in "hi" {
+            model.apply(.print(character))
+        }
+        model.apply(.carriageReturn)
+        model.apply(.lineFeed)
+
+        model.apply(.eraseScreen(.cursorToEnd))
+        for character in "$ " {
+            model.apply(.print(character))
+        }
+
+        XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)).prefix(7), "echo hi")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(1).map(\.character)).prefix(2), "hi")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(2).map(\.character)).prefix(2), "$ ")
+    }
+
+    func testModelEraseAllClearsScreenAndPendingWrapWithoutMovingCursor() {
         var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
         model.apply(.print("A"))
         model.apply(.print("B"))
 
-        model.apply(.clearScreen)
+        model.apply(.eraseScreen(.all))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+
         model.apply(.print("C"))
 
         XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
-        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "C")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, " ")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "C")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 1)).character, " ")
+    }
+
+    func testModelEraseFromCursorToEndClearsPendingWrapWithoutMovingCursor() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("A"))
+        model.apply(.print("B"))
+
+        model.apply(.eraseScreen(.cursorToEnd))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+
+        model.apply(.print("C"))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "A")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "C")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 1)).character, " ")
+    }
+
+    func testModelEraseStartToCursorClearsPendingWrapWithoutMovingCursor() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("A"))
+        model.apply(.print("B"))
+
+        model.apply(.eraseScreen(.startToCursor))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+
+        model.apply(.print("C"))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, " ")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "C")
         XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 1)).character, " ")
     }
 

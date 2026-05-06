@@ -10,9 +10,15 @@ public enum TerminalEvent: Equatable, Sendable {
     case carriageReturn
     case lineFeed
     case backspace
-    case clearScreen
+    case eraseScreen(TerminalEraseMode)
     case clearLine
     case setGraphicRendition([Int])
     case useAlternateScreen(Bool)
     case malformedSequence
+}
+
+public enum TerminalEraseMode: Equatable, Sendable {
+    case cursorToEnd
+    case startToCursor
+    case all
 }
