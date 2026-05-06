@@ -377,11 +377,48 @@ extension TerminalCoreTests {
         model.apply(.print("B"))
 
         model.apply(.eraseScreen(.all))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+
         model.apply(.print("C"))
 
         XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
-        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "C")
-        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, " ")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, " ")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "C")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 1)).character, " ")
+    }
+
+    func testModelEraseFromCursorToEndClearsPendingWrapWithoutMovingCursor() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("A"))
+        model.apply(.print("B"))
+
+        model.apply(.eraseScreen(.cursorToEnd))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+
+        model.apply(.print("C"))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "A")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "C")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 1)).character, " ")
+    }
+
+    func testModelEraseStartToCursorClearsPendingWrapWithoutMovingCursor() {
+        var model = TerminalModel(columns: 2, rows: 2, scrollbackLimit: 5)
+        model.apply(.print("A"))
+        model.apply(.print("B"))
+
+        model.apply(.eraseScreen(.startToCursor))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+
+        model.apply(.print("C"))
+
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, " ")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "C")
         XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 1)).character, " ")
     }
 

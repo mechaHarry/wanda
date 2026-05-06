@@ -162,13 +162,9 @@ public struct TerminalModel: Equatable, Sendable {
             withVisibleGrid { grid in
                 grid.clearAll()
             }
-            if pendingWrap {
-                setCursor(row: cursor.row, column: 0)
-            } else {
-                setPendingWrap(false)
-            }
             markAllRowsDirty()
         }
+        setPendingWrap(false)
     }
 
     private mutating func clearVisibleRow(_ row: Int, from startColumn: Int, through endColumn: Int) {
