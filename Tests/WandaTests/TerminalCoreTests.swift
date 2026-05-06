@@ -217,6 +217,32 @@ extension TerminalCoreTests {
         XCTAssertEqual(events, [.useAlternateScreen(true), .useAlternateScreen(false)])
     }
 
+    func testParserDiscardsOSCTitleSequenceWithoutPrintingPayload() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}]0;/\u{0007}A".utf8))
+
+        XCTAssertEqual(events, [.print("A")])
+    }
+
+    func testParserCarriesSplitOSCStateAcrossParseCalls() {
+        var parser = SwiftTerminalParser()
+
+        let firstEvents = parser.parse(Array("\u{001B}]0;/".utf8))
+        let secondEvents = parser.parse(Array("\u{0007}A".utf8))
+
+        XCTAssertEqual(firstEvents, [])
+        XCTAssertEqual(secondEvents, [.print("A")])
+    }
+
+    func testParserDiscardsOSCWithStringTerminator() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}]2;Wanda\u{001B}\\A".utf8))
+
+        XCTAssertEqual(events, [.print("A")])
+    }
+
     func testParserRecoversAfterMalformedEscape() {
         var parser = SwiftTerminalParser()
 

@@ -10,15 +10,20 @@ public struct SwiftTerminalParser: TerminalParser {
         case escape
         case csi(String)
         case discardCSI
+        case osc(byteCount: Int)
+        case oscEscape(byteCount: Int)
+        case discardOSC
     }
 
     private var state: State = .ground
     private let maxParameterDigits: Int
     private let maxCSIBufferLength: Int
+    private let maxOSCBufferLength: Int
 
-    public init(maxParameterDigits: Int = 8, maxCSIBufferLength: Int = 64) {
+    public init(maxParameterDigits: Int = 8, maxCSIBufferLength: Int = 64, maxOSCBufferLength: Int = 4_096) {
         self.maxParameterDigits = maxParameterDigits
         self.maxCSIBufferLength = maxCSIBufferLength
+        self.maxOSCBufferLength = maxOSCBufferLength
     }
 
     public mutating func parse(_ bytes: [UInt8]) -> [TerminalEvent] {
@@ -34,6 +39,12 @@ public struct SwiftTerminalParser: TerminalParser {
                 parseCSI(byte, buffer: buffer, events: &events)
             case .discardCSI:
                 discardCSI(byte)
+            case .osc(let byteCount):
+                parseOSC(byte, byteCount: byteCount)
+            case .oscEscape(let byteCount):
+                parseOSCEscape(byte, byteCount: byteCount)
+            case .discardOSC:
+                discardOSC(byte)
             }
         }
 
@@ -62,6 +73,8 @@ public struct SwiftTerminalParser: TerminalParser {
     private mutating func parseEscape(_ byte: UInt8, events: inout [TerminalEvent]) {
         if byte == UInt8(ascii: "[") {
             state = .csi("")
+        } else if byte == UInt8(ascii: "]") {
+            state = .osc(byteCount: 0)
         } else {
             events.append(.malformedSequence)
             state = .ground
@@ -137,6 +150,39 @@ public struct SwiftTerminalParser: TerminalParser {
     private mutating func discardCSI(_ byte: UInt8) {
         if byte >= 0x40 && byte <= 0x7E {
             state = .ground
+        }
+    }
+
+    private mutating func parseOSC(_ byte: UInt8, byteCount: Int) {
+        switch byte {
+        case 0x07:
+            state = .ground
+        case 0x1B:
+            state = .oscEscape(byteCount: byteCount)
+        default:
+            let nextByteCount = byteCount + 1
+            state = nextByteCount > maxOSCBufferLength ? .discardOSC : .osc(byteCount: nextByteCount)
+        }
+    }
+
+    private mutating func parseOSCEscape(_ byte: UInt8, byteCount: Int) {
+        if byte == UInt8(ascii: "\\") {
+            state = .ground
+            return
+        }
+
+        let nextByteCount = byteCount + 2
+        state = nextByteCount > maxOSCBufferLength ? .discardOSC : .osc(byteCount: nextByteCount)
+    }
+
+    private mutating func discardOSC(_ byte: UInt8) {
+        switch byte {
+        case 0x07:
+            state = .ground
+        case 0x1B:
+            state = .oscEscape(byteCount: maxOSCBufferLength)
+        default:
+            break
         }
     }
 
