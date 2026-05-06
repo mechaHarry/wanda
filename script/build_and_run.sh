@@ -64,6 +64,50 @@ verify_bundle() {
   /usr/bin/plutil -lint "$INFO_PLIST" >/dev/null
 }
 
+wait_for_window() {
+  local attempts=50
+  local saw_process=false
+  local system_events_error=""
+  local count
+
+  while (( attempts > 0 )); do
+    if pgrep -x "$APP_NAME" >/dev/null; then
+      saw_process=true
+      if count="$(/usr/bin/osascript -e "tell application \"System Events\" to tell process \"$APP_NAME\" to count windows" 2>&1)"; then
+        system_events_error=""
+        if [[ "$count" =~ ^[1-9][0-9]*$ ]]; then
+          return 0
+        fi
+      else
+        system_events_error="$count"
+      fi
+    fi
+
+    sleep 0.1
+    attempts=$((attempts - 1))
+  done
+
+  if [[ "$saw_process" != true ]]; then
+    echo "$APP_NAME did not start within verification timeout" >&2
+    return 1
+  fi
+
+  if ! pgrep -x "$APP_NAME" >/dev/null; then
+    echo "$APP_NAME exited before opening a window" >&2
+    return 1
+  fi
+
+  if [[ -n "$system_events_error" ]]; then
+    echo "Unable to inspect $APP_NAME windows through System Events." >&2
+    echo "Grant Accessibility permission to the calling terminal or Codex app, then retry --verify." >&2
+    echo "$system_events_error" >&2
+    return 1
+  fi
+
+  echo "$APP_NAME did not open a window within verification timeout" >&2
+  return 1
+}
+
 case "$MODE" in
   run)
     stop_existing_app
@@ -79,8 +123,7 @@ case "$MODE" in
     stage_bundle
     verify_bundle
     open_app
-    sleep 1
-    pgrep -x "$APP_NAME" >/dev/null
+    wait_for_window
     ;;
   --debug|debug)
     stop_existing_app
