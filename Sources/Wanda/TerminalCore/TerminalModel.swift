@@ -56,7 +56,7 @@ public struct TerminalModel: Equatable, Sendable {
             lineFeed()
         case .backspace:
             setCursor(row: cursor.row, column: cursor.column - 1)
-        case .clearScreen:
+        case .eraseScreen:
             withVisibleGrid { grid in
                 grid.clearAll()
             }

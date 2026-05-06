@@ -110,7 +110,16 @@ public struct SwiftTerminalParser: TerminalParser {
         case UInt8(ascii: "D"):
             events.append(.cursorBackward(movementParameter(parameters)))
         case UInt8(ascii: "J"):
-            events.append(.clearScreen)
+            switch parameters.first ?? 0 {
+            case 0:
+                events.append(.eraseScreen(.cursorToEnd))
+            case 1:
+                events.append(.eraseScreen(.startToCursor))
+            case 2:
+                events.append(.eraseScreen(.all))
+            default:
+                events.append(.malformedSequence)
+            }
         case UInt8(ascii: "K"):
             events.append(.clearLine)
         case UInt8(ascii: "m"):

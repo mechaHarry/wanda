@@ -193,7 +193,20 @@ extension TerminalCoreTests {
 
         let events = parser.parse(Array("\u{001B}[2J\u{001B}[K\u{001B}[m\u{001B}[31;1m".utf8))
 
-        XCTAssertEqual(events, [.clearScreen, .clearLine, .setGraphicRendition([0]), .setGraphicRendition([31, 1])])
+        XCTAssertEqual(events, [.eraseScreen(.all), .clearLine, .setGraphicRendition([0]), .setGraphicRendition([31, 1])])
+    }
+
+    func testParserEmitsEraseScreenModes() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[J\u{001B}[0J\u{001B}[1J\u{001B}[2J".utf8))
+
+        XCTAssertEqual(events, [
+            .eraseScreen(.cursorToEnd),
+            .eraseScreen(.cursorToEnd),
+            .eraseScreen(.startToCursor),
+            .eraseScreen(.all),
+        ])
     }
 
     func testParserEmitsAlternateScreenEvents() {
@@ -286,7 +299,7 @@ extension TerminalCoreTests {
         model.apply(.print("B"))
         XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).attributes, TerminalAttributes())
 
-        model.apply(.clearScreen)
+        model.apply(.eraseScreen(.all))
         XCTAssertEqual(model.visibleGrid.rowCells(0), [.blank, .blank, .blank])
         XCTAssertEqual(model.visibleGrid.rowCells(1), [.blank, .blank, .blank])
     }
@@ -296,7 +309,7 @@ extension TerminalCoreTests {
         model.apply(.print("A"))
         model.apply(.print("B"))
 
-        model.apply(.clearScreen)
+        model.apply(.eraseScreen(.all))
         model.apply(.print("C"))
 
         XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
