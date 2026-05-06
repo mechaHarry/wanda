@@ -204,6 +204,29 @@ extension RenderingTests {
         XCTAssertTrue(view.device === view.terminalRenderer.device)
     }
 
+    @MainActor
+    func testTerminalMetalViewAndRendererUseThemeBackground() throws {
+        guard MTLCreateSystemDefaultDevice() != nil else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let theme = TerminalTheme(
+            foreground: NSColor(calibratedRed: 0.8, green: 0.9, blue: 1.0, alpha: 1.0),
+            background: NSColor(calibratedRed: 0.11, green: 0.12, blue: 0.13, alpha: 1.0)
+        )
+        let view = try TerminalMetalView(theme: theme)
+        let expectedClearColor = theme.resolvedClearColor(for: view)
+        let expectedLayerColor = theme.resolvedBackgroundNSColor(for: view).cgColor
+
+        XCTAssertEqual(view.clearColor.red, expectedClearColor.red, accuracy: 0.0001)
+        XCTAssertEqual(view.clearColor.green, expectedClearColor.green, accuracy: 0.0001)
+        XCTAssertEqual(view.clearColor.blue, expectedClearColor.blue, accuracy: 0.0001)
+        XCTAssertEqual(view.clearColor.alpha, expectedClearColor.alpha, accuracy: 0.0001)
+        XCTAssertEqual(view.terminalRenderer.defaultBackgroundColor, theme.resolvedBackgroundSIMD(for: view))
+        XCTAssertTrue(view.isOpaque)
+        XCTAssertEqual(view.layer?.backgroundColor?.components, expectedLayerColor.components)
+    }
+
     func testMetalRendererFrameCallbackRunsOnMainActor() async throws {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw XCTSkip("Metal is unavailable")

@@ -76,6 +76,15 @@ final class TerminalSelectionIntegrationTests: XCTestCase {
         XCTAssertEqual(changedPoints, [])
     }
 
+    func testKeyCaptureViewClaimsTransparentBoundsForMouseInput() {
+        let view = KeyCaptureView(frame: CGRect(x: 0, y: 0, width: 100, height: 50))
+
+        XCTAssertTrue(view.hitTest(CGPoint(x: 10, y: 10)) === view)
+        XCTAssertNil(view.hitTest(CGPoint(x: 101, y: 10)))
+        XCTAssertTrue(view.acceptsFirstMouse(for: nil))
+        XCTAssertFalse(view.mouseDownCanMoveWindow)
+    }
+
     func testDragCommitsSelectionAfterMovingToAnotherCell() {
         let view = KeyCaptureView()
         var beganPoints: [TerminalPoint] = []
@@ -100,6 +109,50 @@ final class TerminalSelectionIntegrationTests: XCTestCase {
 
         XCTAssertEqual(layout.cellSize, CGSize(width: 100.0 / 3.0, height: 35))
         XCTAssertEqual(layout.point(for: CGPoint(x: 99, y: 69)), TerminalPoint(column: 2, row: 1))
+    }
+
+    func testTerminalSurfaceLayoutMapsInputToDisplayedSnapshotGrid() {
+        let layout = TerminalSurfaceLayout(
+            viewSize: CGSize(width: 900, height: 900),
+            displayedColumns: 80,
+            displayedRows: 30,
+            preferredCellSize: CGSize(width: 9, height: 18)
+        )
+
+        XCTAssertEqual(layout.resizeColumns, 100)
+        XCTAssertEqual(layout.resizeRows, 50)
+        XCTAssertEqual(layout.inputLayout.columns, 80)
+        XCTAssertEqual(layout.inputLayout.rows, 30)
+        XCTAssertEqual(layout.inputLayout.point(for: CGPoint(x: 899, y: 899)), TerminalPoint(column: 79, row: 29))
+    }
+
+    func testSelectionOverlayRectsUseSnapshotGridAndIgnoreMouseHits() {
+        let view = TerminalSelectionOverlayView(frame: CGRect(x: 0, y: 0, width: 80, height: 40))
+        let snapshot = TerminalRendererSnapshot(
+            columns: 4,
+            rows: 2,
+            cells: Array(repeating: .blank, count: 8),
+            cursor: TerminalPoint(column: 0, row: 0),
+            dirtyRows: []
+        )
+
+        view.update(
+            selection: TerminalSelection(
+                start: TerminalPoint(column: 1, row: 0),
+                end: TerminalPoint(column: 2, row: 1)
+            ),
+            snapshot: snapshot
+        )
+
+        XCTAssertEqual(
+            view.selectionRects(in: CGSize(width: 80, height: 40)),
+            [
+                CGRect(x: 20, y: 0, width: 60, height: 20),
+                CGRect(x: 0, y: 20, width: 60, height: 20)
+            ]
+        )
+        XCTAssertNil(view.hitTest(CGPoint(x: 10, y: 10)))
+        XCTAssertFalse(view.isOpaque)
     }
 
     func testRowRangesReturnEmptyWhenSelectionIsOutsideVisibleRows() {

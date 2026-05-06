@@ -45,8 +45,24 @@ final class KeyCaptureView: NSView {
         true
     }
 
+    override var mouseDownCanMoveWindow: Bool {
+        false
+    }
+
     override var isFlipped: Bool {
         true
+    }
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0, bounds.contains(point) else {
+            return nil
+        }
+
+        return self
     }
 
     override func viewDidMoveToWindow() {

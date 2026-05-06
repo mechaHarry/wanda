@@ -35,6 +35,18 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             }
         }
     }
+    public private(set) var defaultBackgroundColor: SIMD4<Float> {
+        get {
+            stateLock.withLock {
+                storedDefaultBackgroundColor
+            }
+        }
+        set {
+            stateLock.withLock {
+                storedDefaultBackgroundColor = newValue
+            }
+        }
+    }
     public var framePresented: (@Sendable (UInt64) -> Void)? {
         get {
             stateLock.withLock {
@@ -57,6 +69,8 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
     private var storedDebugVertexCount = 0
     private var storedVertexBuffer: MTLBuffer?
     private var storedFramePresented: (@Sendable (UInt64) -> Void)?
+    private var storedDefaultForegroundColor = SIMD4<Float>(0.92, 0.94, 0.96, 1)
+    private var storedDefaultBackgroundColor = SIMD4<Float>(0.02, 0.02, 0.025, 1)
 
     public init(device: MTLDevice, framePresented: (@Sendable (UInt64) -> Void)? = nil) throws {
         guard let commandQueue = device.makeCommandQueue() else {
@@ -74,6 +88,13 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         self.pipelineState = pipelineState
         self.storedFramePresented = framePresented
         super.init()
+    }
+
+    public func updateTheme(foregroundColor: SIMD4<Float>, backgroundColor: SIMD4<Float>) {
+        stateLock.withLock {
+            storedDefaultForegroundColor = foregroundColor
+            storedDefaultBackgroundColor = backgroundColor
+        }
     }
 
     public func update(snapshot: TerminalRendererSnapshot) {
@@ -144,6 +165,9 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             width: CGFloat(snapshot.columns) * cellSize.width,
             height: CGFloat(snapshot.rows) * cellSize.height
         )
+        let defaultColors = stateLock.withLock {
+            (foreground: storedDefaultForegroundColor, background: storedDefaultBackgroundColor)
+        }
         var vertices: [GlyphVertex] = []
         vertices.reserveCapacity(snapshot.cells.count * 18)
 
@@ -156,8 +180,8 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
 
                 let cell = snapshot.cells[cellIndex]
                 let isCursor = snapshot.cursor == TerminalPoint(column: column, row: row)
-                var foregroundColor = Self.rgba(for: cell.attributes.foreground, defaultColor: Self.defaultForegroundColor)
-                var backgroundColor = Self.rgba(for: cell.attributes.background, defaultColor: Self.defaultBackgroundColor)
+                var foregroundColor = Self.rgba(for: cell.attributes.foreground, defaultColor: defaultColors.foreground)
+                var backgroundColor = Self.rgba(for: cell.attributes.background, defaultColor: defaultColors.background)
                 if cell.attributes.isInverse || isCursor {
                     swap(&foregroundColor, &backgroundColor)
                 }
@@ -422,8 +446,6 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         }
     }
 
-    private static let defaultForegroundColor = SIMD4<Float>(0.92, 0.94, 0.96, 1)
-    private static let defaultBackgroundColor = SIMD4<Float>(0.02, 0.02, 0.02, 1)
     private static let solidTextureCoordinate = SIMD2<Float>(-1, -1)
 
     private static let ansiPalette: [SIMD4<Float>] = [
