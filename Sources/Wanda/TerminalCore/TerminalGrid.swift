@@ -28,6 +28,16 @@ public struct TerminalGrid: Equatable, Sendable {
         }
     }
 
+    public mutating func clearCells(in row: Int, columns columnRange: ClosedRange<Int>) {
+        precondition(row >= 0 && row < rows, "Row out of bounds")
+        precondition(columnRange.lowerBound >= 0, "Column range lower bound out of bounds")
+        precondition(columnRange.upperBound < columns, "Column range upper bound out of bounds")
+
+        for column in columnRange {
+            setCell(.blank, at: TerminalPoint(column: column, row: row))
+        }
+    }
+
     public mutating func clearAll() {
         cells = Array(repeating: .blank, count: columns * rows)
     }

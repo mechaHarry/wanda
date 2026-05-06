@@ -56,12 +56,8 @@ public struct TerminalModel: Equatable, Sendable {
             lineFeed()
         case .backspace:
             setCursor(row: cursor.row, column: cursor.column - 1)
-        case .eraseScreen:
-            withVisibleGrid { grid in
-                grid.clearAll()
-            }
-            setCursor(row: 0, column: 0)
-            markAllRowsDirty()
+        case .eraseScreen(let mode):
+            eraseScreen(mode)
         case .clearLine:
             let row = cursor.row
             withVisibleGrid { grid in
@@ -144,6 +140,46 @@ public struct TerminalModel: Equatable, Sendable {
         }
 
         markAllRowsDirty()
+    }
+
+    private mutating func eraseScreen(_ mode: TerminalEraseMode) {
+        switch mode {
+        case .cursorToEnd:
+            clearVisibleRow(cursor.row, from: cursor.column, through: visibleGrid.columns - 1)
+            if cursor.row + 1 < visibleGrid.rows {
+                for row in (cursor.row + 1)..<visibleGrid.rows {
+                    clearVisibleRow(row, from: 0, through: visibleGrid.columns - 1)
+                }
+            }
+        case .startToCursor:
+            if cursor.row > 0 {
+                for row in 0..<cursor.row {
+                    clearVisibleRow(row, from: 0, through: visibleGrid.columns - 1)
+                }
+            }
+            clearVisibleRow(cursor.row, from: 0, through: cursor.column)
+        case .all:
+            withVisibleGrid { grid in
+                grid.clearAll()
+            }
+            if pendingWrap {
+                setCursor(row: cursor.row, column: 0)
+            } else {
+                setPendingWrap(false)
+            }
+            markAllRowsDirty()
+        }
+    }
+
+    private mutating func clearVisibleRow(_ row: Int, from startColumn: Int, through endColumn: Int) {
+        guard startColumn <= endColumn else {
+            return
+        }
+
+        withVisibleGrid { grid in
+            grid.clearCells(in: row, columns: startColumn...endColumn)
+        }
+        markDirty(row: row)
     }
 
     private mutating func appendScrollbackRow(_ row: [TerminalCell]) {
