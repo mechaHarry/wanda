@@ -9,5 +9,13 @@ struct WandaApp: App {
             TerminalWindowView()
         }
         .windowResizability(.contentSize)
+        .commands {
+            WandaCommands()
+        }
+
+        Window("Metal Stress Benchmark", id: WandaWindowID.metalStressBenchmark) {
+            BenchmarkTerminalWindowView()
+        }
+        .windowResizability(.contentSize)
     }
 }
