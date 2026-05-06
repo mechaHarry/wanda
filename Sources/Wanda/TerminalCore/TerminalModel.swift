@@ -50,6 +50,8 @@ public struct TerminalModel: Equatable, Sendable {
             setCursor(row: cursor.row, column: cursor.column + amount)
         case .cursorBackward(let amount):
             setCursor(row: cursor.row, column: cursor.column - amount)
+        case .cursorHorizontalAbsolute(let column):
+            setCursor(row: cursor.row, column: column)
         case .carriageReturn:
             setCursor(row: cursor.row, column: 0)
         case .lineFeed:
@@ -219,10 +221,22 @@ public struct TerminalModel: Equatable, Sendable {
                 currentAttributes.isUnderline = true
             case 7:
                 currentAttributes.isInverse = true
+            case 22:
+                currentAttributes.isBold = false
+            case 23:
+                currentAttributes.isItalic = false
+            case 24:
+                currentAttributes.isUnderline = false
+            case 27:
+                currentAttributes.isInverse = false
             case 30...37:
                 currentAttributes.foreground = .ansi(index: UInt8(parameter - 30))
+            case 39:
+                currentAttributes.foreground = .default
             case 40...47:
                 currentAttributes.background = .ansi(index: UInt8(parameter - 40))
+            case 49:
+                currentAttributes.background = .default
             default:
                 break
             }

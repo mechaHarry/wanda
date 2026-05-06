@@ -196,6 +196,14 @@ extension TerminalCoreTests {
         XCTAssertEqual(events, [.eraseScreen(.all), .clearLine, .setGraphicRendition([0]), .setGraphicRendition([31, 1])])
     }
 
+    func testParserEmitsCursorHorizontalAbsolute() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[3G".utf8))
+
+        XCTAssertEqual(events, [.cursorHorizontalAbsolute(column: 2)])
+    }
+
     func testParserEmitsEraseScreenModes() {
         var parser = SwiftTerminalParser()
 
@@ -328,6 +336,37 @@ extension TerminalCoreTests {
         model.apply(.eraseScreen(.all))
         XCTAssertEqual(model.visibleGrid.rowCells(0), [.blank, .blank, .blank])
         XCTAssertEqual(model.visibleGrid.rowCells(1), [.blank, .blank, .blank])
+    }
+
+    func testModelClearsUnderlineWithSGR24() {
+        var model = TerminalModel(columns: 3, rows: 1, scrollbackLimit: 5)
+
+        model.apply(.setGraphicRendition([4]))
+        model.apply(.print("A"))
+        model.apply(.setGraphicRendition([24]))
+        model.apply(.print("B"))
+
+        XCTAssertTrue(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).attributes.isUnderline)
+        XCTAssertFalse(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).attributes.isUnderline)
+    }
+
+    func testModelCursorHorizontalAbsoluteKeepsCurrentRow() {
+        var model = TerminalModel(columns: 6, rows: 2, scrollbackLimit: 5)
+        for character in "abc" {
+            model.apply(.print(character))
+        }
+        model.apply(.carriageReturn)
+        model.apply(.lineFeed)
+        for character in "def" {
+            model.apply(.print(character))
+        }
+
+        model.apply(.cursorHorizontalAbsolute(column: 1))
+        model.apply(.print("/"))
+
+        XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "abc   ")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(1).map(\.character)), "d/f   ")
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 2, row: 1))
     }
 
     func testModelEraseFromCursorToEndPreservesEarlierOutput() {

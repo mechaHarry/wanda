@@ -40,6 +40,12 @@ struct TerminalWindowView: View {
                     onTokenSelection: { point in
                         viewModel.selectToken(at: point)
                     },
+                    onSelectionCleared: {
+                        viewModel.clearSelection()
+                    },
+                    onScrollRows: { rows in
+                        viewModel.scrollOutput(byRows: rows)
+                    },
                     onCopy: {
                         _ = TerminalSelectionClipboard.copy(viewModel.selectedText())
                     }

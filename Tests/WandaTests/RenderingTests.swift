@@ -188,6 +188,30 @@ extension RenderingTests {
         XCTAssertEqual(renderer.debugVertexCount, 12)
     }
 
+    func testRendererBuildsUnderlineBeforeGlyphs() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let snapshot = TerminalRendererSnapshot(
+            columns: 1,
+            rows: 1,
+            cells: [
+                TerminalCell(
+                    character: "A",
+                    attributes: TerminalAttributes(isUnderline: true)
+                )
+            ],
+            cursor: TerminalPoint(column: 0, row: 1),
+            dirtyRows: [0]
+        )
+
+        renderer.update(snapshot: snapshot)
+
+        XCTAssertEqual(renderer.debugPrimitiveKinds, [.underline, .glyph])
+    }
+
     @MainActor
     func testTerminalMetalViewUsesOnDemandConfiguration() throws {
         guard MTLCreateSystemDefaultDevice() != nil else {

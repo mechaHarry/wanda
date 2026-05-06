@@ -30,6 +30,7 @@ public final class TerminalViewModel: ObservableObject {
     private var outputTaskID: Int?
     private var nextOutputTaskID = 0
     private var outputPumpBatchCount = 0
+    private var scrollbackOffsetRows = 0
     private let environment: [String: String]
     private let terminalFactory: TerminalFactory
 
@@ -118,12 +119,13 @@ public final class TerminalViewModel: ObservableObject {
         }
 
         if !events.isEmpty {
+            scrollbackOffsetRows = 0
             for pendingLatencyID in pendingLatencyIDs {
                 latencyProbe.recordModelMutation(for: pendingLatencyID)
             }
         }
 
-        snapshot = TerminalRendererSnapshot(model: model)
+        refreshSnapshot()
     }
 
     public func beginSelection(at point: TerminalPoint) {
@@ -147,6 +149,16 @@ public final class TerminalViewModel: ObservableObject {
 
     public func clearSelection() {
         selection = nil
+    }
+
+    public func scrollOutput(byRows rows: Int) {
+        guard rows != 0, !model.isUsingAlternateScreen else {
+            return
+        }
+
+        scrollbackOffsetRows = min(max(scrollbackOffsetRows + rows, 0), model.scrollback.count)
+        clearSelection()
+        refreshSnapshot(forceDirty: true)
     }
 
     public func selectedText() -> String? {
@@ -183,7 +195,8 @@ public final class TerminalViewModel: ObservableObject {
         }
 
         model.resize(columns: columns, rows: rows)
-        snapshot = TerminalRendererSnapshot(model: model)
+        scrollbackOffsetRows = 0
+        refreshSnapshot()
     }
 
     public nonisolated func framePresented(at timestamp: UInt64) {
@@ -208,6 +221,14 @@ public final class TerminalViewModel: ObservableObject {
 
         let pendingLatencyID = pendingLatencyIDs.removeFirst()
         latencyProbe.recordFramePresented(for: pendingLatencyID, at: timestamp)
+    }
+
+    private func refreshSnapshot(forceDirty: Bool = false) {
+        var nextSnapshot = TerminalRendererSnapshot(model: model, scrollbackOffsetRows: scrollbackOffsetRows)
+        if forceDirty {
+            nextSnapshot.dirtyRows = Set(0..<nextSnapshot.rows)
+        }
+        snapshot = nextSnapshot
     }
 
     private func startOutputPumpIfNeeded(for terminal: any PseudoTerminal) {

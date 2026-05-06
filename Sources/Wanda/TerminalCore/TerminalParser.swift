@@ -122,6 +122,9 @@ public struct SwiftTerminalParser: TerminalParser {
             events.append(.cursorForward(movementParameter(parameters)))
         case UInt8(ascii: "D"):
             events.append(.cursorBackward(movementParameter(parameters)))
+        case UInt8(ascii: "G"):
+            let column = max(cursorParameter(parameters, at: 0) - 1, 0)
+            events.append(.cursorHorizontalAbsolute(column: column))
         case UInt8(ascii: "J"):
             switch parameters.first ?? 0 {
             case 0:

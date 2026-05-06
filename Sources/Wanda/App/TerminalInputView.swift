@@ -7,6 +7,8 @@ struct TerminalInputView: NSViewRepresentable {
     var onSelectionBegan: (TerminalPoint) -> Void
     var onSelectionChanged: (TerminalPoint) -> Void
     var onTokenSelection: (TerminalPoint) -> Void
+    var onSelectionCleared: () -> Void
+    var onScrollRows: (Int) -> Void
     var onCopy: () -> Void
 
     func makeNSView(context: Context) -> KeyCaptureView {
@@ -16,6 +18,8 @@ struct TerminalInputView: NSViewRepresentable {
         view.onSelectionBegan = onSelectionBegan
         view.onSelectionChanged = onSelectionChanged
         view.onTokenSelection = onTokenSelection
+        view.onSelectionCleared = onSelectionCleared
+        view.onScrollRows = onScrollRows
         view.onCopy = onCopy
         view.requestFirstResponderOnNextMainActorTurn()
         return view
@@ -27,6 +31,8 @@ struct TerminalInputView: NSViewRepresentable {
         nsView.onSelectionBegan = onSelectionBegan
         nsView.onSelectionChanged = onSelectionChanged
         nsView.onTokenSelection = onTokenSelection
+        nsView.onSelectionCleared = onSelectionCleared
+        nsView.onScrollRows = onScrollRows
         nsView.onCopy = onCopy
     }
 }
@@ -37,6 +43,8 @@ final class KeyCaptureView: NSView {
     var onSelectionBegan: ((TerminalPoint) -> Void)?
     var onSelectionChanged: ((TerminalPoint) -> Void)?
     var onTokenSelection: ((TerminalPoint) -> Void)?
+    var onSelectionCleared: (() -> Void)?
+    var onScrollRows: ((Int) -> Void)?
     var onCopy: (() -> Void)?
     private var dragStart: TerminalPoint?
     private var didCommitDragSelection = false
@@ -83,6 +91,10 @@ final class KeyCaptureView: NSView {
         handleMouseUp(at: convert(event.locationInWindow, from: nil))
     }
 
+    override func scrollWheel(with event: NSEvent) {
+        handleScroll(deltaY: event.scrollingDeltaY)
+    }
+
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command),
            event.charactersIgnoringModifiers?.lowercased() == "c" {
@@ -124,6 +136,7 @@ final class KeyCaptureView: NSView {
 
         dragStart = point
         didCommitDragSelection = false
+        onSelectionCleared?()
     }
 
     func handleMouseDragged(to location: CGPoint) {
@@ -155,6 +168,16 @@ final class KeyCaptureView: NSView {
         }
 
         onSelectionChanged?(terminalPoint(for: location))
+    }
+
+    func handleScroll(deltaY: CGFloat) {
+        guard deltaY != 0 else {
+            return
+        }
+
+        let rowExtent = max(layout.cellSize.height, 1)
+        let rows = max(1, Int(ceil(abs(deltaY) / rowExtent)))
+        onScrollRows?(deltaY > 0 ? rows : -rows)
     }
 
     private func terminalPoint(for location: CGPoint) -> TerminalPoint {

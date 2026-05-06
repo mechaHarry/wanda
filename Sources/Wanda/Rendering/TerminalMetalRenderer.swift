@@ -47,6 +47,18 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             }
         }
     }
+    private(set) var debugPrimitiveKinds: [TerminalMetalPrimitiveKind] {
+        get {
+            stateLock.withLock {
+                storedDebugPrimitiveKinds
+            }
+        }
+        set {
+            stateLock.withLock {
+                storedDebugPrimitiveKinds = newValue
+            }
+        }
+    }
     public var framePresented: (@Sendable (UInt64) -> Void)? {
         get {
             stateLock.withLock {
@@ -67,6 +79,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
     private let stateLock = NSLock()
     private var storedLastSnapshot: TerminalRendererSnapshot?
     private var storedDebugVertexCount = 0
+    private var storedDebugPrimitiveKinds: [TerminalMetalPrimitiveKind] = []
     private var storedVertexBuffer: MTLBuffer?
     private var storedFramePresented: (@Sendable (UInt64) -> Void)?
     private var storedDefaultForegroundColor = SIMD4<Float>(0.92, 0.94, 0.96, 1)
@@ -98,12 +111,13 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
     }
 
     public func update(snapshot: TerminalRendererSnapshot) {
-        let vertices = buildVertices(for: snapshot)
-        let vertexBuffer = makeVertexBuffer(vertices: vertices)
+        let buildResult = buildVertices(for: snapshot)
+        let vertexBuffer = makeVertexBuffer(vertices: buildResult.vertices)
 
         stateLock.withLock {
             storedLastSnapshot = snapshot
-            storedDebugVertexCount = vertices.count
+            storedDebugVertexCount = buildResult.vertices.count
+            storedDebugPrimitiveKinds = buildResult.primitiveKinds
             storedVertexBuffer = vertexBuffer
         }
     }
@@ -155,9 +169,9 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         }
     }
 
-    private func buildVertices(for snapshot: TerminalRendererSnapshot) -> [GlyphVertex] {
+    private func buildVertices(for snapshot: TerminalRendererSnapshot) -> VertexBuildResult {
         guard snapshot.columns > 0, snapshot.rows > 0 else {
-            return []
+            return VertexBuildResult(vertices: [], primitiveKinds: [])
         }
 
         let cellSize = glyphAtlas.cellSize
@@ -169,6 +183,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             (foreground: storedDefaultForegroundColor, background: storedDefaultBackgroundColor)
         }
         var vertices: [GlyphVertex] = []
+        var primitiveKinds: [TerminalMetalPrimitiveKind] = []
         vertices.reserveCapacity(snapshot.cells.count * 18)
 
         for row in 0..<snapshot.rows {
@@ -194,6 +209,18 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                         color: backgroundColor,
                         to: &vertices
                     )
+                    primitiveKinds.append(isCursor ? .cursor : .background)
+                }
+
+                if cell.attributes.isUnderline {
+                    appendUnderlineQuad(
+                        column: column,
+                        row: row,
+                        viewportSize: viewportSize,
+                        color: foregroundColor,
+                        to: &vertices
+                    )
+                    primitiveKinds.append(.underline)
                 }
 
                 if cell.character != " ", let glyph = glyphAtlas.glyph(for: cell.character) {
@@ -207,6 +234,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                         italicSkew: cell.attributes.isItalic ? 1 : 0,
                         to: &vertices
                     )
+                    primitiveKinds.append(.glyph)
 
                     if cell.attributes.isBold {
                         appendGlyphQuad(
@@ -219,22 +247,13 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
                             italicSkew: cell.attributes.isItalic ? 1 : 0,
                             to: &vertices
                         )
+                        primitiveKinds.append(.glyph)
                     }
-                }
-
-                if cell.attributes.isUnderline {
-                    appendUnderlineQuad(
-                        column: column,
-                        row: row,
-                        viewportSize: viewportSize,
-                        color: foregroundColor,
-                        to: &vertices
-                    )
                 }
             }
         }
 
-        return vertices
+        return VertexBuildResult(vertices: vertices, primitiveKinds: primitiveKinds)
     }
 
     private func appendGlyphQuad(
@@ -516,4 +535,16 @@ private struct GlyphVertex {
     let position: SIMD2<Float>
     let textureCoordinate: SIMD2<Float>
     let color: SIMD4<Float>
+}
+
+enum TerminalMetalPrimitiveKind: Equatable {
+    case background
+    case cursor
+    case underline
+    case glyph
+}
+
+private struct VertexBuildResult {
+    var vertices: [GlyphVertex]
+    var primitiveKinds: [TerminalMetalPrimitiveKind]
 }

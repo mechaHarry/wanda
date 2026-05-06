@@ -7,6 +7,7 @@ public enum TerminalEvent: Equatable, Sendable {
     case cursorDown(Int)
     case cursorForward(Int)
     case cursorBackward(Int)
+    case cursorHorizontalAbsolute(column: Int)
     case carriageReturn
     case lineFeed
     case backspace

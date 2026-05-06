@@ -65,15 +65,18 @@ final class TerminalSelectionIntegrationTests: XCTestCase {
         let view = KeyCaptureView()
         var beganPoints: [TerminalPoint] = []
         var changedPoints: [TerminalPoint] = []
+        var clearCount = 0
         view.layout = TerminalInputLayout(columns: 4, rows: 2, cellSize: CGSize(width: 10, height: 20))
         view.onSelectionBegan = { beganPoints.append($0) }
         view.onSelectionChanged = { changedPoints.append($0) }
+        view.onSelectionCleared = { clearCount += 1 }
 
         view.handleMouseDown(at: CGPoint(x: 5, y: 5), clickCount: 1)
         view.handleMouseUp(at: CGPoint(x: 5, y: 5))
 
         XCTAssertEqual(beganPoints, [])
         XCTAssertEqual(changedPoints, [])
+        XCTAssertEqual(clearCount, 1)
     }
 
     func testKeyCaptureViewClaimsTransparentBoundsForMouseInput() {
@@ -89,15 +92,46 @@ final class TerminalSelectionIntegrationTests: XCTestCase {
         let view = KeyCaptureView()
         var beganPoints: [TerminalPoint] = []
         var changedPoints: [TerminalPoint] = []
+        var clearCount = 0
         view.layout = TerminalInputLayout(columns: 4, rows: 2, cellSize: CGSize(width: 10, height: 20))
         view.onSelectionBegan = { beganPoints.append($0) }
         view.onSelectionChanged = { changedPoints.append($0) }
+        view.onSelectionCleared = { clearCount += 1 }
 
         view.handleMouseDown(at: CGPoint(x: 5, y: 5), clickCount: 1)
         view.handleMouseDragged(to: CGPoint(x: 25, y: 5))
 
         XCTAssertEqual(beganPoints, [TerminalPoint(column: 0, row: 0)])
         XCTAssertEqual(changedPoints, [TerminalPoint(column: 2, row: 0)])
+        XCTAssertEqual(clearCount, 1)
+    }
+
+    func testScrollWheelRequestsScrollbackRows() {
+        let view = KeyCaptureView()
+        var requestedRows: [Int] = []
+        view.layout = TerminalInputLayout(columns: 4, rows: 2, cellSize: CGSize(width: 10, height: 20))
+        view.onScrollRows = { requestedRows.append($0) }
+
+        view.handleScroll(deltaY: 21)
+        view.handleScroll(deltaY: -41)
+        view.handleScroll(deltaY: 0)
+
+        XCTAssertEqual(requestedRows, [2, -3])
+    }
+
+    func testViewModelScrollsIntoScrollbackAndSnapsToBottomOnOutput() {
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10)
+        viewModel.processOutput(Array("row1\r\nrow2\r\nrow3".utf8))
+
+        XCTAssertEqual(visibleText(in: viewModel.snapshot), "row2\nrow3")
+
+        viewModel.scrollOutput(byRows: 1)
+
+        XCTAssertEqual(visibleText(in: viewModel.snapshot), "row1\nrow2")
+
+        viewModel.processOutput(Array("!".utf8))
+
+        XCTAssertEqual(visibleText(in: viewModel.snapshot), "row3\n!   ")
     }
 
     func testInputLayoutFitsActualRenderedCellSize() {
@@ -171,5 +205,18 @@ final class TerminalSelectionIntegrationTests: XCTestCase {
         )
 
         XCTAssertEqual(selection.rowRanges(columns: 4, rows: 2), [])
+    }
+
+    private func visibleText(in snapshot: TerminalRendererSnapshot?) -> String {
+        guard let snapshot else {
+            return ""
+        }
+
+        return (0..<snapshot.rows).map { row in
+            let start = row * snapshot.columns
+            let end = min(start + snapshot.columns, snapshot.cells.count)
+            return snapshot.cells[start..<end].map(\.character).map(String.init).joined()
+        }
+        .joined(separator: "\n")
     }
 }
