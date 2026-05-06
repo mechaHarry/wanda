@@ -17,8 +17,10 @@ swift test
 ## Manual Run
 
 ```bash
-swift run Wanda
+./script/build_and_run.sh
 ```
+
+This stages and launches `dist/Wanda.app`. `swift run Wanda` remains useful for low-level SwiftPM diagnostics, but the app-bundle script is the normal local run path.
 
 ## MVP Scope
 
@@ -28,7 +30,7 @@ The first milestone is a single native macOS terminal window with a local shell,
 
 - `swift test` passes.
 - `swift build` passes.
-- `swift run Wanda` launches one native macOS window.
+- `./script/build_and_run.sh` launches one native macOS window from `dist/Wanda.app`.
 - Printable keys reach the shell.
 - Option-Left sends `ESC b`.
 - Option-Right sends `ESC f`.
