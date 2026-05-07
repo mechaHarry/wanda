@@ -130,6 +130,25 @@ extension TerminalCoreTests {
         XCTAssertEqual(events, [.print("a"), .print("b"), .print("c")])
     }
 
+    func testParserEmitsUTF8PrintableText() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("❯éΩ".utf8))
+
+        XCTAssertEqual(events, [.print("❯"), .print("é"), .print("Ω")])
+    }
+
+    func testParserCarriesSplitUTF8StateAcrossParseCalls() {
+        var parser = SwiftTerminalParser()
+        let bytes = Array("❯".utf8)
+
+        let firstEvents = parser.parse(Array(bytes.prefix(2)))
+        let secondEvents = parser.parse(Array(bytes.suffix(1)))
+
+        XCTAssertEqual(firstEvents, [])
+        XCTAssertEqual(secondEvents, [.print("❯")])
+    }
+
     func testParserEmitsCursorMoveForCSIH() {
         var parser = SwiftTerminalParser()
 

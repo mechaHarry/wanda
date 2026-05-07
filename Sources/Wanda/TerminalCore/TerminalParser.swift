@@ -13,6 +13,7 @@ public struct SwiftTerminalParser: TerminalParser {
         case osc(byteCount: Int)
         case oscEscape(byteCount: Int)
         case discardOSC
+        case utf8(bytes: [UInt8], expectedLength: Int)
     }
 
     private var state: State = .ground
@@ -45,6 +46,8 @@ public struct SwiftTerminalParser: TerminalParser {
                 parseOSCEscape(byte, byteCount: byteCount)
             case .discardOSC:
                 discardOSC(byte)
+            case .utf8(let bytes, let expectedLength):
+                parseUTF8(byte, bytes: bytes, expectedLength: expectedLength, events: &events)
             }
         }
 
@@ -65,9 +68,44 @@ public struct SwiftTerminalParser: TerminalParser {
             if let scalar = UnicodeScalar(Int(byte)) {
                 events.append(.print(Character(scalar)))
             }
+        case 0xC2...0xDF:
+            state = .utf8(bytes: [byte], expectedLength: 2)
+        case 0xE0...0xEF:
+            state = .utf8(bytes: [byte], expectedLength: 3)
+        case 0xF0...0xF4:
+            state = .utf8(bytes: [byte], expectedLength: 4)
         default:
             break
         }
+    }
+
+    private mutating func parseUTF8(
+        _ byte: UInt8,
+        bytes: [UInt8],
+        expectedLength: Int,
+        events: inout [TerminalEvent]
+    ) {
+        guard byte >= 0x80 && byte <= 0xBF else {
+            events.append(.malformedSequence)
+            state = .ground
+            parseGround(byte, events: &events)
+            return
+        }
+
+        let nextBytes = bytes + [byte]
+        guard nextBytes.count == expectedLength else {
+            state = .utf8(bytes: nextBytes, expectedLength: expectedLength)
+            return
+        }
+
+        if let string = String(bytes: nextBytes, encoding: .utf8),
+           string.count == 1,
+           let character = string.first {
+            events.append(.print(character))
+        } else {
+            events.append(.malformedSequence)
+        }
+        state = .ground
     }
 
     private mutating func parseEscape(_ byte: UInt8, events: inout [TerminalEvent]) {
