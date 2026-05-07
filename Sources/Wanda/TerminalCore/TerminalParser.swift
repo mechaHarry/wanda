@@ -175,7 +175,16 @@ public struct SwiftTerminalParser: TerminalParser {
                 events.append(.malformedSequence)
             }
         case UInt8(ascii: "K"):
-            events.append(.clearLine)
+            switch parameters.first ?? 0 {
+            case 0:
+                events.append(.eraseLine(.cursorToEnd))
+            case 1:
+                events.append(.eraseLine(.startToCursor))
+            case 2:
+                events.append(.eraseLine(.all))
+            default:
+                events.append(.malformedSequence)
+            }
         case UInt8(ascii: "m"):
             events.append(.setGraphicRendition(parameters))
         case UInt8(ascii: "h") where buffer == "?1049":

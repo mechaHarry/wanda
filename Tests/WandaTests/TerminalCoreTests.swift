@@ -212,7 +212,12 @@ extension TerminalCoreTests {
 
         let events = parser.parse(Array("\u{001B}[2J\u{001B}[K\u{001B}[m\u{001B}[31;1m".utf8))
 
-        XCTAssertEqual(events, [.eraseScreen(.all), .clearLine, .setGraphicRendition([0]), .setGraphicRendition([31, 1])])
+        XCTAssertEqual(events, [
+            .eraseScreen(.all),
+            .eraseLine(.cursorToEnd),
+            .setGraphicRendition([0]),
+            .setGraphicRendition([31, 1])
+        ])
     }
 
     func testParserEmitsCursorHorizontalAbsolute() {
@@ -236,6 +241,19 @@ extension TerminalCoreTests {
         ])
     }
 
+    func testParserEmitsEraseLineModes() {
+        var parser = SwiftTerminalParser()
+
+        let events = parser.parse(Array("\u{001B}[K\u{001B}[0K\u{001B}[1K\u{001B}[2K".utf8))
+
+        XCTAssertEqual(events, [
+            .eraseLine(.cursorToEnd),
+            .eraseLine(.cursorToEnd),
+            .eraseLine(.startToCursor),
+            .eraseLine(.all),
+        ])
+    }
+
     func testParserEmitsAlternateScreenEvents() {
         var parser = SwiftTerminalParser()
 
@@ -250,6 +268,56 @@ extension TerminalCoreTests {
         let events = parser.parse(Array("\u{001B}]0;/\u{0007}A".utf8))
 
         XCTAssertEqual(events, [.print("A")])
+    }
+
+    func testModelKeepsUTF8PromptGlyphThroughZshPromptRedraw() {
+        var parser = SwiftTerminalParser()
+        var model = TerminalModel(columns: 80, rows: 8, scrollbackLimit: 10)
+        let output = [
+            "\u{001B}]0;/\u{0007}\r\n",
+            "\u{001B}[0m\u{001B}[27m\u{001B}[24m\u{001B}[J\u{001B}[34m/\u{001B}[39m\r\n",
+            "\r\u{001B}[35m❯\u{001B}[39m \u{001B}[K\u{001B}[?2004h",
+            "\r\r\u{001B}[A\u{001B}[0m\u{001B}[27m\u{001B}[24m\u{001B}[J\u{001B}[34m/\u{001B}[39m\r\n",
+            "\r\u{001B}[35m❯\u{001B}[39m \u{001B}[K",
+        ].joined()
+        let bytes = Array(output.utf8)
+
+        for event in parser.parse(bytes) {
+            model.apply(event)
+        }
+
+        let snapshot = TerminalRendererSnapshot(model: model)
+        let visibleText = (0..<snapshot.rows).map { row in
+            let start = row * snapshot.columns
+            let end = min(start + snapshot.columns, snapshot.cells.count)
+            return snapshot.cells[start..<end].map(\.character).map(String.init).joined()
+        }.joined(separator: "\n")
+
+        XCTAssertTrue(visibleText.contains("❯"))
+    }
+
+    func testModelKeepsUTF8PromptGlyphAfterCommandAndPromptReturn() {
+        var parser = SwiftTerminalParser()
+        var model = TerminalModel(columns: 80, rows: 8, scrollbackLimit: 10)
+        let output = [
+            "\u{001B}[34m/\u{001B}[39m\r\n",
+            "\r\u{001B}[35m❯\u{001B}[39m \u{001B}[K\u{001B}[?2004h",
+            "p\u{0008}pwd\u{0008}\u{0008}\u{0008}\u{001B}[32mp\u{001B}[32mw\u{001B}[32md\u{001B}[39m\u{001B}[?2004l\r\r\n",
+            "\u{001B}]0;wanda: pwd\u{0007}/\r\n",
+            "\u{001B}]0;/\u{0007}\r\n",
+            "\u{001B}[0m\u{001B}[27m\u{001B}[24m\u{001B}[J\u{001B}[34m/\u{001B}[39m\r\n",
+            "\r\u{001B}[35m❯\u{001B}[39m \u{001B}[K\u{001B}[?2004h",
+        ].joined()
+        let bytes = Array(output.utf8)
+
+        for event in parser.parse(bytes) {
+            model.apply(event)
+        }
+
+        let snapshot = TerminalRendererSnapshot(model: model)
+        let promptCount = snapshot.cells.filter { $0.character == "❯" }.count
+
+        XCTAssertGreaterThanOrEqual(promptCount, 1)
     }
 
     func testParserCarriesSplitOSCStateAcrossParseCalls() {
@@ -345,7 +413,7 @@ extension TerminalCoreTests {
         XCTAssertTrue(styledCell.attributes.isUnderline)
         XCTAssertTrue(styledCell.attributes.isInverse)
 
-        model.apply(.clearLine)
+        model.apply(.eraseLine(.all))
         XCTAssertEqual(model.visibleGrid.rowCells(0), [.blank, .blank, .blank])
 
         model.apply(.setGraphicRendition([0]))
@@ -355,6 +423,24 @@ extension TerminalCoreTests {
         model.apply(.eraseScreen(.all))
         XCTAssertEqual(model.visibleGrid.rowCells(0), [.blank, .blank, .blank])
         XCTAssertEqual(model.visibleGrid.rowCells(1), [.blank, .blank, .blank])
+    }
+
+    func testModelEraseLineModesClearOnlyRequestedLineRange() {
+        var model = TerminalModel(columns: 5, rows: 1, scrollbackLimit: 5)
+        for character in "abcde" {
+            model.apply(.print(character))
+        }
+
+        model.apply(.moveCursor(row: 0, column: 2))
+        model.apply(.eraseLine(.cursorToEnd))
+        XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "ab   ")
+
+        for character in "cde" {
+            model.apply(.print(character))
+        }
+        model.apply(.moveCursor(row: 0, column: 2))
+        model.apply(.eraseLine(.startToCursor))
+        XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "   de")
     }
 
     func testModelClearsUnderlineWithSGR24() {

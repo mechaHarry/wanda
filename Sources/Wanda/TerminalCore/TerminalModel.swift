@@ -60,12 +60,8 @@ public struct TerminalModel: Equatable, Sendable {
             setCursor(row: cursor.row, column: cursor.column - 1)
         case .eraseScreen(let mode):
             eraseScreen(mode)
-        case .clearLine:
-            let row = cursor.row
-            withVisibleGrid { grid in
-                grid.clearLine(row: row)
-            }
-            markDirty(row: row)
+        case .eraseLine(let mode):
+            eraseLine(mode)
         case .setGraphicRendition(let parameters):
             applySGR(parameters)
         case .useAlternateScreen(let enabled):
@@ -165,6 +161,18 @@ public struct TerminalModel: Equatable, Sendable {
                 grid.clearAll()
             }
             markAllRowsDirty()
+        }
+        setPendingWrap(false)
+    }
+
+    private mutating func eraseLine(_ mode: TerminalEraseMode) {
+        switch mode {
+        case .cursorToEnd:
+            clearVisibleRow(cursor.row, from: cursor.column, through: visibleGrid.columns - 1)
+        case .startToCursor:
+            clearVisibleRow(cursor.row, from: 0, through: cursor.column)
+        case .all:
+            clearVisibleRow(cursor.row, from: 0, through: visibleGrid.columns - 1)
         }
         setPendingWrap(false)
     }

@@ -12,7 +12,7 @@ public enum TerminalEvent: Equatable, Sendable {
     case lineFeed
     case backspace
     case eraseScreen(TerminalEraseMode)
-    case clearLine
+    case eraseLine(TerminalEraseMode)
     case setGraphicRendition([Int])
     case useAlternateScreen(Bool)
     case malformedSequence
