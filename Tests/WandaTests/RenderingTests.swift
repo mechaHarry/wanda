@@ -54,10 +54,31 @@ final class RenderingTests: XCTestCase {
         }
     }
 
-    func testGlyphAtlasDoesNotInventUnsupportedNonASCIIGlyphs() throws {
+    func testGlyphAtlasDynamicallyCachesUnicodeGlyphs() throws {
         let atlas = try GlyphAtlas(fontName: "Menlo", fontSize: 14)
 
-        XCTAssertNil(atlas.glyph(for: "é"))
+        let promptGlyph = try XCTUnwrap(atlas.glyph(for: "❯"))
+        let greekGlyph = try XCTUnwrap(atlas.glyph(for: "Ω"))
+
+        XCTAssertEqual(promptGlyph.character, "❯")
+        XCTAssertEqual(greekGlyph.character, "Ω")
+        XCTAssertGreaterThanOrEqual(atlas.pendingTextureUpdateCount, 2)
+    }
+
+    func testGlyphAtlasReturnsBoundedTextureUpdatesForDynamicGlyphs() throws {
+        let atlas = try GlyphAtlas(fontName: "Menlo", fontSize: 14)
+
+        _ = atlas.glyph(for: "❯")
+        _ = atlas.glyph(for: "Ω")
+
+        let firstBatch = atlas.takeTextureUpdates(maximumCount: 1)
+        let secondBatch = atlas.takeTextureUpdates(maximumCount: 4)
+
+        XCTAssertEqual(firstBatch.count, 1)
+        XCTAssertEqual(secondBatch.count, 1)
+        XCTAssertEqual(atlas.pendingTextureUpdateCount, 0)
+        XCTAssertTrue(firstBatch.allSatisfy { containsVisibleAlpha(in: $0.bytes) })
+        XCTAssertTrue(secondBatch.allSatisfy { containsVisibleAlpha(in: $0.bytes) })
     }
 
     func testDefaultThemeUsesPureBlackAccessibleColorScheme() {
@@ -134,6 +155,30 @@ extension RenderingTests {
         renderer.update(snapshot: TerminalRendererSnapshot(model: model))
 
         XCTAssertEqual(renderer.debugVertexCount, 12)
+    }
+
+    func testRendererBuildsVerticesForDynamicUnicodeText() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else {
+            throw XCTSkip("Metal is unavailable")
+        }
+
+        let renderer = try TerminalMetalRenderer(device: device)
+        let snapshot = TerminalRendererSnapshot(
+            columns: 2,
+            rows: 1,
+            cells: [
+                TerminalCell(character: "❯"),
+                TerminalCell(character: "Ω"),
+            ],
+            cursor: TerminalPoint(column: 0, row: 1),
+            dirtyRows: [0]
+        )
+
+        renderer.update(snapshot: snapshot)
+
+        XCTAssertEqual(renderer.debugVertexCount, 12)
+        XCTAssertEqual(renderer.debugPrimitiveKinds, [.glyph, .glyph])
+        XCTAssertGreaterThanOrEqual(renderer.debugGlyphAtlasTextureUpdateCount, 2)
     }
 
     func testRendererBuildsCursorVerticesForBlankScreen() throws {
@@ -364,6 +409,12 @@ extension RenderingTests {
         await fulfillment(of: [expectation], timeout: 1)
 
         XCTAssertTrue(probe.wasCallbackOnMainThread)
+    }
+}
+
+private func containsVisibleAlpha(in bytes: Data) -> Bool {
+    bytes.enumerated().contains { offset, byte in
+        offset % 4 == 3 && byte > 0
     }
 }
 

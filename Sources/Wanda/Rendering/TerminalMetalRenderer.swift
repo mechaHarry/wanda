@@ -71,6 +71,18 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             }
         }
     }
+    private(set) var debugGlyphAtlasTextureUpdateCount: Int {
+        get {
+            stateLock.withLock {
+                storedDebugGlyphAtlasTextureUpdateCount
+            }
+        }
+        set {
+            stateLock.withLock {
+                storedDebugGlyphAtlasTextureUpdateCount = newValue
+            }
+        }
+    }
     public var framePresented: (@Sendable (UInt64) -> Void)? {
         get {
             stateLock.withLock {
@@ -93,6 +105,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
     private var storedDebugVertexCount = 0
     private var storedDebugPrimitiveKinds: [TerminalMetalPrimitiveKind] = []
     private var storedDebugPrimitiveColors: [SIMD4<Float>] = []
+    private var storedDebugGlyphAtlasTextureUpdateCount = 0
     private var storedVertexBuffer: MTLBuffer?
     private var storedFramePresented: (@Sendable (UInt64) -> Void)?
     private var storedDefaultForegroundColor = TerminalAccessibleColors.defaultForeground
@@ -104,7 +117,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         }
 
         let glyphAtlas = try GlyphAtlas(fontName: "Menlo", fontSize: 14)
-        let atlasTexture = try Self.makeAtlasTexture(device: device, image: glyphAtlas.image)
+        let atlasTexture = try Self.makeAtlasTexture(device: device, atlas: glyphAtlas)
         let pipelineState = try Self.makePipelineState(device: device)
 
         self.device = device
@@ -125,6 +138,9 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
 
     public func update(snapshot: TerminalRendererSnapshot) {
         let buildResult = buildVertices(for: snapshot)
+        let glyphAtlasTextureUpdateCount = applyGlyphAtlasTextureUpdates(
+            maximumCount: Self.maximumGlyphTextureUpdatesPerSnapshot
+        )
         let vertexBuffer = makeVertexBuffer(vertices: buildResult.vertices)
 
         stateLock.withLock {
@@ -132,6 +148,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
             storedDebugVertexCount = buildResult.vertices.count
             storedDebugPrimitiveKinds = buildResult.primitiveKinds
             storedDebugPrimitiveColors = buildResult.primitiveColors
+            storedDebugGlyphAtlasTextureUpdateCount = glyphAtlasTextureUpdateCount
             storedVertexBuffer = vertexBuffer
         }
     }
@@ -444,9 +461,55 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
         }
     }
 
-    private static func makeAtlasTexture(device: MTLDevice, image: CGImage) throws -> MTLTexture {
-        let textureLoader = MTKTextureLoader(device: device)
-        return try textureLoader.newTexture(cgImage: image, options: [.SRGB: false])
+    private func applyGlyphAtlasTextureUpdates(maximumCount: Int) -> Int {
+        let updates = glyphAtlas.takeTextureUpdates(maximumCount: maximumCount)
+
+        for update in updates {
+            update.bytes.withUnsafeBytes { rawBuffer in
+                guard let baseAddress = rawBuffer.baseAddress else {
+                    return
+                }
+
+                atlasTexture.replace(
+                    region: MTLRegionMake2D(update.x, update.y, update.width, update.height),
+                    mipmapLevel: 0,
+                    withBytes: baseAddress,
+                    bytesPerRow: update.bytesPerRow
+                )
+            }
+        }
+
+        return updates.count
+    }
+
+    private static func makeAtlasTexture(device: MTLDevice, atlas: GlyphAtlas) throws -> MTLTexture {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba8Unorm,
+            width: atlas.pixelWidth,
+            height: atlas.pixelHeight,
+            mipmapped: false
+        )
+        descriptor.usage = [.shaderRead]
+
+        guard let texture = device.makeTexture(descriptor: descriptor) else {
+            throw RendererError.metalDeviceUnavailable
+        }
+
+        let update = atlas.fullTextureUpdate()
+        update.bytes.withUnsafeBytes { rawBuffer in
+            guard let baseAddress = rawBuffer.baseAddress else {
+                return
+            }
+
+            texture.replace(
+                region: MTLRegionMake2D(update.x, update.y, update.width, update.height),
+                mipmapLevel: 0,
+                withBytes: baseAddress,
+                bytesPerRow: update.bytesPerRow
+            )
+        }
+
+        return texture
     }
 
     private static func makePipelineState(device: MTLDevice) throws -> MTLRenderPipelineState {
@@ -474,6 +537,7 @@ public final class TerminalMetalRenderer: NSObject, MTKViewDelegate, @unchecked 
     }
 
     private static let solidTextureCoordinate = SIMD2<Float>(-1, -1)
+    private static let maximumGlyphTextureUpdatesPerSnapshot = 128
 
     private static let shaderSource = """
     #include <metal_stdlib>
