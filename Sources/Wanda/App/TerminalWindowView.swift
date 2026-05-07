@@ -70,6 +70,12 @@ struct TerminalWindowView: View {
             .onChange(of: geometry.size) { _, newSize in
                 resizeTerminal(to: terminalSurfaceLayout(for: newSize))
             }
+            .onChange(of: viewModel.shouldCloseWindow) { _, shouldCloseWindow in
+                guard shouldCloseWindow else {
+                    return
+                }
+                windowGeometry.closeObservedWindow()
+            }
             .task {
                 viewModel.startDefaultShell()
                 resizeTerminal(to: surfaceLayout)
@@ -133,6 +139,10 @@ final class TerminalWindowGeometryController: ObservableObject {
         }
 
         save(frame: frame)
+    }
+
+    func closeObservedWindow() {
+        window?.close()
     }
 
     func frameToApply(to windowID: ObjectIdentifier, currentFrame: CGRect, visibleFrame: CGRect) -> CGRect? {

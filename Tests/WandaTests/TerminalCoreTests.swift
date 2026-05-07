@@ -119,6 +119,45 @@ final class TerminalCoreTests: XCTestCase {
         XCTAssertEqual(grid.rows, 1)
         XCTAssertEqual(grid.rowCells(0).map(\.character), ["A", " "])
     }
+
+    func testModelResizeShrinksFromTopAndPreservesBottomContent() {
+        var model = TerminalModel(columns: 4, rows: 4, scrollbackLimit: 10)
+        writeRows(["1111", "2222", "3333", "4444"], into: &model)
+        model.apply(.moveCursor(row: 3, column: 2))
+
+        model.resize(columns: 4, rows: 2)
+
+        XCTAssertEqual(String(model.visibleGrid.rowCells(0).map(\.character)), "3333")
+        XCTAssertEqual(String(model.visibleGrid.rowCells(1).map(\.character)), "4444")
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 2, row: 1))
+        XCTAssertEqual(model.scrollback.suffix(2).map { String($0.map(\.character)) }, ["1111", "2222"])
+    }
+
+    func testModelResizeGrowsFromScrollbackWithoutLosingVisibleContent() {
+        var model = TerminalModel(columns: 4, rows: 4, scrollbackLimit: 10)
+        writeRows(["1111", "2222", "3333", "4444"], into: &model)
+        model.apply(.moveCursor(row: 3, column: 2))
+
+        model.resize(columns: 4, rows: 2)
+        model.resize(columns: 4, rows: 4)
+
+        XCTAssertEqual((0..<4).map { String(model.visibleGrid.rowCells($0).map(\.character)) }, [
+            "1111",
+            "2222",
+            "3333",
+            "4444",
+        ])
+        XCTAssertEqual(model.cursor, TerminalPoint(column: 2, row: 3))
+    }
+}
+
+private func writeRows(_ rows: [String], into model: inout TerminalModel) {
+    for (row, text) in rows.enumerated() {
+        model.apply(.moveCursor(row: row, column: 0))
+        for character in text {
+            model.apply(.print(character))
+        }
+    }
 }
 
 extension TerminalCoreTests {
@@ -663,14 +702,16 @@ extension TerminalCoreTests {
     func testModelResizePreservesContentClampsCursorAndMarksVisibleRowsDirty() {
         var model = TerminalModel(columns: 4, rows: 2, scrollbackLimit: 5)
         model.apply(.print("A"))
-        model.apply(.moveCursor(row: 1, column: 3))
+        model.apply(.moveCursor(row: 1, column: 1))
         model.apply(.print("B"))
+        model.apply(.moveCursor(row: 1, column: 3))
 
         model.resize(columns: 2, rows: 1)
 
         XCTAssertEqual(model.visibleGrid.columns, 2)
         XCTAssertEqual(model.visibleGrid.rows, 1)
-        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 0, row: 0)).character, "A")
+        XCTAssertEqual(model.visibleGrid.cell(at: TerminalPoint(column: 1, row: 0)).character, "B")
+        XCTAssertEqual(model.scrollback.last?.map(\.character), ["A", " ", " ", " "])
         XCTAssertEqual(model.cursor, TerminalPoint(column: 1, row: 0))
         XCTAssertEqual(model.dirtyRows, Set([0]))
 

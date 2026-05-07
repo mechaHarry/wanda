@@ -224,6 +224,20 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(viewModel.debugHasOutputTask)
     }
 
+    func testOutputPumpRequestsWindowCloseWhenShellExits() async {
+        let pty = FakePseudoTerminal(readResults: [.emptyAndSetState(.exited(0))])
+        let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)
+
+        viewModel.startDefaultShell()
+
+        let requestedClose = await waitForCondition {
+            viewModel.shouldCloseWindow
+        }
+
+        XCTAssertTrue(requestedClose)
+        XCTAssertEqual(viewModel.statusMessage, "Shell exited with status 0.")
+    }
+
     func testOutputPumpReportsFailedPTYStatus() async {
         let pty = FakePseudoTerminal(readResults: [.emptyAndSetState(.failed("fork failed"))])
         let viewModel = TerminalViewModel(columns: 4, rows: 2, scrollbackLimit: 10, pty: pty)

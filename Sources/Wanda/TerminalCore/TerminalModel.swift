@@ -81,10 +81,9 @@ public struct TerminalModel: Equatable, Sendable {
         precondition(columns > 0, "TerminalModel columns must be positive")
         precondition(rows > 0, "TerminalModel rows must be positive")
 
-        primaryGrid.resize(columns: columns, rows: rows)
+        resizePrimaryGrid(columns: columns, rows: rows)
         alternateGrid.resize(columns: columns, rows: rows)
 
-        primaryCursor = clampedCursor(primaryCursor, columns: columns, rows: rows)
         alternateCursor = clampedCursor(alternateCursor, columns: columns, rows: rows)
         primaryPendingWrap = false
         alternatePendingWrap = false
@@ -195,6 +194,64 @@ public struct TerminalModel: Equatable, Sendable {
         if scrollback.count > scrollbackLimit {
             scrollback.removeFirst(scrollback.count - scrollbackLimit)
         }
+    }
+
+    private mutating func resizePrimaryGrid(columns newColumns: Int, rows newRows: Int) {
+        let oldScrollbackCount = scrollback.count
+        let oldCursorCombinedRow = oldScrollbackCount + primaryCursor.row
+        let visibleRows = (0..<primaryGrid.rows).map { primaryGrid.rowCells($0) }
+        let keptVisibleRowEnd = max(primaryCursor.row, Self.lastNonBlankRow(in: visibleRows))
+        let usefulVisibleRows = Array(visibleRows.prefix(keptVisibleRowEnd + 1))
+        let combinedRows = scrollback + usefulVisibleRows
+        let keptRowCount = min(newRows, combinedRows.count)
+        let keptStart = max(combinedRows.count - keptRowCount, 0)
+        let keptRows = Array(combinedRows.suffix(keptRowCount))
+
+        scrollback = cappedScrollback(Array(combinedRows.prefix(keptStart)))
+        primaryGrid = TerminalGrid(columns: newColumns, rows: newRows)
+
+        for (offset, row) in keptRows.enumerated() {
+            primaryGrid.replaceRow(
+                offset,
+                with: Self.normalizedRow(row, columns: newColumns)
+            )
+        }
+
+        let adjustedCursorRow = oldCursorCombinedRow - keptStart
+        primaryCursor = TerminalPoint(
+            column: min(max(primaryCursor.column, 0), newColumns - 1),
+            row: min(max(adjustedCursorRow, 0), newRows - 1)
+        )
+    }
+
+    private func cappedScrollback(_ rows: [[TerminalCell]]) -> [[TerminalCell]] {
+        guard scrollbackLimit > 0 else {
+            return []
+        }
+
+        guard rows.count > scrollbackLimit else {
+            return rows
+        }
+
+        return Array(rows.suffix(scrollbackLimit))
+    }
+
+    private static func normalizedRow(_ row: [TerminalCell], columns: Int) -> [TerminalCell] {
+        if row.count == columns {
+            return row
+        }
+
+        if row.count > columns {
+            return Array(row.prefix(columns))
+        }
+
+        return row + Array(repeating: .blank, count: columns - row.count)
+    }
+
+    private static func lastNonBlankRow(in rows: [[TerminalCell]]) -> Int {
+        rows.lastIndex { row in
+            row.contains { $0 != .blank }
+        } ?? 0
     }
 
     private mutating func useAlternateScreen(_ enabled: Bool) {

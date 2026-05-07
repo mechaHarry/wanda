@@ -13,6 +13,7 @@ public final class TerminalViewModel: ObservableObject {
     @Published public private(set) var snapshot: TerminalRendererSnapshot?
     @Published public private(set) var statusMessage: String?
     @Published public private(set) var selection: TerminalSelection?
+    @Published public private(set) var shouldCloseWindow = false
 
     private static let maxPendingLatencyIDs = 128
     private static let maxOutputBatchBytes = 64 * 1024
@@ -88,6 +89,8 @@ public final class TerminalViewModel: ObservableObject {
     }
 
     public func startDefaultShell() {
+        shouldCloseWindow = false
+
         if let pty {
             startOutputPumpIfNeeded(for: pty)
             return
@@ -381,6 +384,7 @@ public final class TerminalViewModel: ObservableObject {
             break
         case .exited(let status):
             statusMessage = "Shell exited with status \(status)."
+            shouldCloseWindow = true
         case .signaled(let signal):
             statusMessage = "Shell terminated by signal \(signal)."
         case .failed(let reason):

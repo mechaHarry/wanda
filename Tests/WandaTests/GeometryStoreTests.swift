@@ -199,6 +199,17 @@ final class GeometryStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testWindowGeometryControllerClosesObservedWindow() {
+        let controller = TerminalWindowGeometryController(geometryStore: GeometryStore(defaults: makeDefaults()))
+        let window = CloseTrackingWindow(frame: CGRect(x: 25, y: 35, width: 720, height: 420))
+        controller.observe(window: window)
+
+        controller.closeObservedWindow()
+
+        XCTAssertTrue(window.didClose)
+    }
+
+    @MainActor
     func testWindowAccessViewDeliversOnlyOnWindowAttachmentChange() {
         let firstWindow = makeWindow(frame: CGRect(x: 25, y: 35, width: 720, height: 420))
         let secondWindow = makeWindow(frame: CGRect(x: 45, y: 55, width: 760, height: 460))
@@ -244,3 +255,21 @@ final class GeometryStoreTests: XCTestCase {
 }
 
 private final class WindowToken {}
+
+private final class CloseTrackingWindow: NSWindow {
+    private(set) var didClose = false
+
+    init(frame: CGRect) {
+        super.init(
+            contentRect: frame,
+            styleMask: [.titled, .resizable],
+            backing: .buffered,
+            defer: true
+        )
+        contentView = NSView(frame: CGRect(origin: .zero, size: frame.size))
+    }
+
+    override func close() {
+        didClose = true
+    }
+}
