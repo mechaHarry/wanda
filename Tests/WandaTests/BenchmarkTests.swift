@@ -18,6 +18,8 @@ final class BenchmarkTests: XCTestCase {
 
         XCTAssertEqual(batches.count, 2)
         XCTAssertTrue(output.contains("\u{001B}[30;40m"))
+        XCTAssertTrue(output.contains("❯"))
+        XCTAssertTrue(output.contains("┌"))
         XCTAssertEqual(workload.printableCharacterCount, 48)
         XCTAssertEqual(lines.count, 3)
         XCTAssertTrue(lines.allSatisfy { $0.count == 16 })

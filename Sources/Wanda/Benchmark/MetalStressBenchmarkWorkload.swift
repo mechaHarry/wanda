@@ -39,6 +39,9 @@ struct MetalStressBenchmarkWorkload: Equatable, Sendable {
         let seed = String(format: "%05d", index)
         let tokens = [
             "WANDA",
+            "❯➜λΩ",
+            "┌─┬│└┘",
+            "█▓▒░◆◇",
             "METAL",
             "0123456789",
             "abcdef",
